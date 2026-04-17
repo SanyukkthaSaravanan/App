@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unzip -o \"C:/Users/sanyu/Downloads/Flaire app - Prototype 5.zip\" -d .)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(mv \"skeleton-front.png.png\" \"skeleton-front.png\")",
+      "Bash(mv \"skeleton-side.png.png\" \"skeleton-side.png\")",
+      "Bash(ls -la skeleton-*.png)"
+    ]
+  }
+}
