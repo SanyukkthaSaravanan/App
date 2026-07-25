@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { diet as dietApi } from '../../lib/api';
+import { diet as dietApi, type ParsedLog } from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -7,8 +7,10 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
-import { Plus, X, Apple, AlertTriangle, Mic, MicOff, AlertCircle } from 'lucide-react';
+import { Plus, X, Apple, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { VoiceLogInput } from './voice-log-input';
+import { DetectedExtras } from './detected-extras';
 
 interface FoodEntry {
   id: string;
@@ -57,7 +59,9 @@ export function DietTracker() {
     }).catch(() => {});
   }, []);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  // Full parsed result from the last voice note — drives the cross-category
+  // "also detected" chips (symptoms/meds mentioned alongside food).
+  const [lastParsed, setLastParsed] = useState<ParsedLog | null>(null);
   const [newEntry, setNewEntry] = useState({
     name: '',
     category: 'Breakfast',
@@ -114,6 +118,7 @@ export function DietTracker() {
       reaction: 'neutral',
       notes: '',
     });
+    clearVoiceExtras();
     setShowAddForm(false);
   };
 
@@ -144,23 +149,22 @@ export function DietTracker() {
     }
   };
 
-  const toggleVoiceRecording = () => {
-    setIsRecording(!isRecording);
-    // Mock voice recording - simulates voice input for food logging
-    if (!isRecording) {
-      setTimeout(() => {
-        setNewEntry({
-          ...newEntry,
-          name: 'Grilled salmon with quinoa and steamed broccoli',
-          category: 'Lunch',
-          time: '12:30',
-          reaction: 'positive',
-          notes: 'Felt energized and no stomach issues',
-        });
-        setIsRecording(false);
-      }, 2500);
+  // Voice note processed → fill the food form + surface cross-category items.
+  const handleVoiceParsed = (parsed: ParsedLog) => {
+    if (parsed.diet) {
+      const noteParts = [parsed.diet.notes, parsed.summary].filter(Boolean);
+      setNewEntry({
+        name: parsed.diet.food,
+        category: parsed.diet.mealType,
+        time: parsed.diet.time,
+        reaction: parsed.diet.reaction,
+        notes: noteParts.join(' — '),
+      });
     }
+    setLastParsed(parsed);
   };
+
+  const clearVoiceExtras = () => setLastParsed(null);
 
   const addTrigger = () => {
     if (!newTrigger) return;
@@ -195,43 +199,14 @@ export function DietTracker() {
         <CardContent className="space-y-6">
           {showAddForm && (
             <div className="p-4 border rounded-lg bg-card space-y-4">
-              {/* Voice Input Option */}
-              <div className="p-3 rounded-lg" style={{ backgroundColor: '#F2EEDA' }}>
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <p className="text-sm font-medium">Quick voice entry</p>
-                    <p className="text-xs text-muted-foreground">
-                      Tell us what you ate and how you felt
-                    </p>
-                  </div>
-                  <Button
-                    variant={isRecording ? 'destructive' : 'default'}
-                    size="sm"
-                    onClick={toggleVoiceRecording}
-                    style={!isRecording ? { backgroundColor: '#7293BB' } : undefined}
-                  >
-                    {isRecording ? (
-                      <>
-                        <MicOff className="h-4 w-4 mr-2" />
-                        Stop
-                      </>
-                    ) : (
-                      <>
-                        <Mic className="h-4 w-4 mr-2" />
-                        Start voice input
-                      </>
-                    )}
-                  </Button>
-                </div>
-                {isRecording && (
-                  <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm mt-2">
-                    <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                    <span className="text-blue-800">
-                      Listening... Say something like "I had salmon and quinoa for lunch at 12:30 and felt great"
-                    </span>
-                  </div>
-                )}
-              </div>
+              {/* Voice Input — Whisper STT → editable transcript → smart parse */}
+              <VoiceLogInput
+                hint='e.g. "I had mac and cheese at noon, felt nauseous after, took some digene"'
+                onParsed={handleVoiceParsed}
+              />
+
+              {/* Cross-category items detected in the voice note */}
+              <DetectedExtras parsed={lastParsed} show={['symptoms', 'medications']} />
 
               <div className="relative">
                 <div className="absolute inset-0 flex items-center" aria-hidden="true">
@@ -336,6 +311,7 @@ export function DietTracker() {
                       reaction: 'neutral',
                       notes: '',
                     });
+                    clearVoiceExtras();
                   }}
                 >
                   Cancel

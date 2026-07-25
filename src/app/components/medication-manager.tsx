@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { medications as medsApi, ocr as ocrApi, type OCRLiveResult } from '../../lib/api';
+import { medications as medsApi, ocr as ocrApi, type OCRLiveResult, type ParsedLog } from '../../lib/api';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -7,8 +7,10 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
-import { Plus, Pill, Clock, AlertCircle, CheckCircle2, Mic, MicOff, ScanLine } from 'lucide-react';
+import { Plus, Pill, Clock, AlertCircle, CheckCircle2, ScanLine } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { VoiceLogInput } from './voice-log-input';
+import { DetectedExtras } from './detected-extras';
 
 // The desktop live scanner needs a local camera + the Python process, so it
 // only works when the backend runs on the user's machine. In cloud/production
@@ -52,7 +54,7 @@ export function MedicationManager() {
     }).catch(() => {});
   }, []);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const [lastParsed, setLastParsed] = useState<ParsedLog | null>(null);
   const [scanPhase, setScanPhase] = useState<'idle' | 'choosing' | 'scanning'>('idle');
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<OCRLiveResult | null>(null);
@@ -119,6 +121,7 @@ export function MedicationManager() {
     setNewMed({ name: '', dosage: '', frequency: 'Daily', time: '', notes: '' });
     setScanResult(null);
     setScanError(null);
+    setLastParsed(null);
     setShowAddForm(false);
   };
 
@@ -141,21 +144,20 @@ export function MedicationManager() {
     return { taken, total, percentage: (taken / total) * 100 };
   };
 
-  const toggleVoiceRecording = () => {
-    setIsRecording(!isRecording);
-    // Mock voice recording - simulates voice input for medication logging
-    if (!isRecording) {
-      setTimeout(() => {
-        setNewMed({
-          ...newMed,
-          name: 'Hydroxychloroquine',
-          dosage: '200mg',
-          time: '9:00 AM',
-          notes: 'Take with breakfast to reduce stomach upset',
-        });
-        setIsRecording(false);
-      }, 2500);
+  // Voice note processed → fill the medication form from the first medication
+  // mentioned, and surface any diet/symptoms for one-tap cross-logging.
+  const handleMedVoiceParsed = (parsed: ParsedLog) => {
+    const med = parsed.medications[0];
+    if (med) {
+      const noteParts = [med.notes, parsed.summary].filter(Boolean);
+      setNewMed((prev) => ({
+        ...prev,
+        name: med.name,
+        dosage: med.dose ?? prev.dosage,
+        notes: noteParts.join(' — '),
+      }));
     }
+    setLastParsed(parsed);
   };
 
   // ── Live desktop scanner (Python OCR) ────────────────────────────────────────
@@ -291,43 +293,12 @@ export function MedicationManager() {
       <CardContent className="space-y-6">
         {showAddForm && (
           <div className="p-4 border rounded-lg bg-card space-y-4">
-            {/* Voice Input Option */}
-            <div className="p-3 rounded-lg" style={{ backgroundColor: '#F2EEDA' }}>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <p className="text-sm font-medium">Quick voice entry</p>
-                  <p className="text-xs text-muted-foreground">
-                    Tell us about your medication and we'll fill in the details
-                  </p>
-                </div>
-                <Button
-                  variant={isRecording ? 'destructive' : 'default'}
-                  size="sm"
-                  onClick={toggleVoiceRecording}
-                  style={!isRecording ? { backgroundColor: '#7293BB' } : undefined}
-                >
-                  {isRecording ? (
-                    <>
-                      <MicOff className="h-4 w-4 mr-2" />
-                      Stop
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="h-4 w-4 mr-2" />
-                      Start voice input
-                    </>
-                  )}
-                </Button>
-              </div>
-              {isRecording && (
-                <div className="flex items-center gap-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm mt-2">
-                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                  <span className="text-blue-800">
-                    Listening... Say something like "Hydroxychloroquine 200mg daily at 9 AM with breakfast"
-                  </span>
-                </div>
-              )}
-            </div>
+            {/* Voice Input — Whisper STT → editable transcript → smart parse */}
+            <VoiceLogInput
+              hint='e.g. "Started hydroxychloroquine 200mg, take with breakfast"'
+              onParsed={handleMedVoiceParsed}
+            />
+            <DetectedExtras parsed={lastParsed} show={['symptoms', 'diet']} />
 
             {/* Scan Input Option — desktop Python OCR scanner */}
             <div className="p-3 rounded-lg" style={{ backgroundColor: '#F2EEDA' }}>

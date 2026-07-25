@@ -326,8 +326,38 @@ export interface NLPResult {
   rawEntities: string[];
 }
 
+// Structured, category-routed parse of a voice/text log entry
+export interface ParsedDiet {
+  food: string;
+  mealType: 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack' | 'Beverage';
+  time: string;
+  reaction: 'positive' | 'negative' | 'neutral';
+  notes: string;
+}
+export interface ParsedSymptom {
+  name: string;
+  severity: number | null;
+  bodyPart: string | null;
+  notes: string;
+}
+export interface ParsedMedication {
+  name: string;
+  dose: string | null;
+  notes: string;
+}
+export interface ParsedLog {
+  diet: ParsedDiet | null;
+  symptoms: ParsedSymptom[];
+  medications: ParsedMedication[];
+  mood: number | null;
+  summary: string;
+  transcript: string;
+  usedAI: boolean;
+}
+
 export const nlp = {
   analyze: (text: string) => post<NLPResult>('/api/nlp/analyze', { text }),
+  parseLog: (text: string) => post<ParsedLog>('/api/nlp/parse-log', { text }),
 };
 
 // ── STT (Speech-to-Text via Whisper) ──────────────────────────────────────────
