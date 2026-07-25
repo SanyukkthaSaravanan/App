@@ -11,8 +11,10 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
+      # Node 22+ ships a native WebSocket, which @supabase/realtime-js requires
+      # at createClient() time. Node 20 crashes on startup without it.
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: JWT_EXPIRES_IN
         value: "7d"
       # Secrets — set these in the Render dashboard (never commit them):
