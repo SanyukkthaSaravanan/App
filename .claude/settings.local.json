@@ -6,7 +6,8 @@
       "Read(//c/Program Files \\(x86\\)/**)",
       "Bash(mv \"skeleton-front.png.png\" \"skeleton-front.png\")",
       "Bash(mv \"skeleton-side.png.png\" \"skeleton-side.png\")",
-      "Bash(ls -la skeleton-*.png)"
+      "Bash(ls -la skeleton-*.png)",
+      "Bash(npx prisma *)"
     ]
   }
 }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const medicalRecordsRouter = Router();
@@ -18,11 +18,14 @@ const schema = z.object({
 
 medicalRecordsRouter.get('/', async (req, res, next) => {
   try {
-    const items = await prisma.medicalRecord.findMany({
-      where: { userId: req.userId! },
-      orderBy: { date: 'desc' },
-    });
-    res.json(items.map((r) => ({ ...r, tags: fromJson<string[]>(r.tags) ?? [] })));
+    const items = sb(
+      await supabase
+        .from('MedicalRecord')
+        .select()
+        .eq('userId', req.userId!)
+        .order('date', { ascending: false })
+    );
+    res.json(items);
   } catch (e) {
     next(e);
   }
@@ -31,19 +34,24 @@ medicalRecordsRouter.get('/', async (req, res, next) => {
 medicalRecordsRouter.post('/', async (req, res, next) => {
   try {
     const body = schema.parse(req.body);
-    const created = await prisma.medicalRecord.create({
-      data: {
-        userId: req.userId!,
-        title: body.title,
-        type: body.type,
-        providerName: body.providerName,
-        date: new Date(body.date),
-        fileUrl: body.fileUrl,
-        notes: body.notes,
-        tags: toJson(body.tags ?? []),
-      },
-    });
-    res.status(201).json({ ...created, tags: body.tags ?? [] });
+    const created = sb(
+      await supabase
+        .from('MedicalRecord')
+        .insert({
+          id: crypto.randomUUID(),
+          userId: req.userId!,
+          title: body.title,
+          type: body.type,
+          providerName: body.providerName ?? null,
+          date: new Date(body.date).toISOString(),
+          fileUrl: body.fileUrl ?? null,
+          notes: body.notes ?? null,
+          tags: body.tags ?? [],
+        })
+        .select()
+        .single()
+    );
+    res.status(201).json(created);
   } catch (e) {
     next(e);
   }

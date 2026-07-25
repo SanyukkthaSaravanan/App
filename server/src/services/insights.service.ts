@@ -1,4 +1,4 @@
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 
 /**
  * Computes pattern insights for a user by analyzing their:
@@ -10,14 +10,19 @@ import { prisma, toJson, fromJson } from '../db';
  */
 export async function computeInsights(userId: string) {
   // Wipe prior computed insights
-  await prisma.insight.deleteMany({ where: { userId } });
+  await supabase.from('Insight').delete().eq('userId', userId);
 
-  const [symptoms, checkIns, dietLogs, flares] = await Promise.all([
-    prisma.symptom.findMany({ where: { userId } }),
-    prisma.dailyCheckIn.findMany({ where: { userId } }),
-    prisma.dietLog.findMany({ where: { userId } }),
-    prisma.flareEvent.findMany({ where: { userId } }),
+  const [symptomsRes, checkInsRes, dietLogsRes, flaresRes] = await Promise.all([
+    supabase.from('Symptom').select().eq('userId', userId),
+    supabase.from('DailyCheckIn').select().eq('userId', userId),
+    supabase.from('DietLog').select().eq('userId', userId),
+    supabase.from('FlareEvent').select().eq('userId', userId),
   ]);
+
+  const symptoms  = (symptomsRes.data  ?? []) as any[];
+  const checkIns  = (checkInsRes.data  ?? []) as any[];
+  const dietLogs  = (dietLogsRes.data  ?? []) as any[];
+  const flares    = (flaresRes.data    ?? []) as any[];
 
   const insights: Array<{
     type: string;
@@ -44,40 +49,38 @@ export async function computeInsights(userId: string) {
     });
   }
 
-  // 2. Average severity trend across last 30 vs prior 30 days
+  // 2. Average severity trend (last 30 vs prior 30 days)
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
-  const recent = symptoms.filter((s) => +s.loggedAt >= now - 30 * day);
-  const prior = symptoms.filter(
-    (s) => +s.loggedAt >= now - 60 * day && +s.loggedAt < now - 30 * day
+  const recent = symptoms.filter((s) => +new Date(s.loggedAt) >= now - 30 * day);
+  const prior  = symptoms.filter(
+    (s) => +new Date(s.loggedAt) >= now - 60 * day && +new Date(s.loggedAt) < now - 30 * day
   );
-  const avg = (arr: typeof symptoms) =>
+  const avg = (arr: any[]) =>
     arr.length ? arr.reduce((a, b) => a + b.severity, 0) / arr.length : 0;
   const recentAvg = avg(recent);
-  const priorAvg = avg(prior);
+  const priorAvg  = avg(prior);
   if (recent.length >= 3 && prior.length >= 3) {
-    const delta = recentAvg - priorAvg;
+    const delta     = recentAvg - priorAvg;
     const direction = delta < -0.5 ? 'improving' : delta > 0.5 ? 'worsening' : 'stable';
     insights.push({
       type: 'trend',
       title: `Severity trend: ${direction}`,
-      description: `Your average symptom severity over the last 30 days is ${recentAvg.toFixed(
-        1
-      )}/10 — a shift of ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs the previous month.`,
+      description: `Your average symptom severity over the last 30 days is ${recentAvg.toFixed(1)}/10 — a shift of ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs the previous month.`,
       data: { recentAvg, priorAvg, delta },
       severity: direction === 'improving' ? 'positive' : direction === 'worsening' ? 'warning' : 'info',
     });
   }
 
   // 3. Sleep ↔ flare correlation
-  const checkInsByDate = new Map<string, typeof checkIns[number]>();
+  const checkInsByDate = new Map<string, any>();
   for (const c of checkIns) {
-    checkInsByDate.set(c.date.toISOString().slice(0, 10), c);
+    checkInsByDate.set(new Date(c.date).toISOString().slice(0, 10), c);
   }
   const flareDaysPoor: number[] = [];
   const flareDaysGood: number[] = [];
   for (const f of flares) {
-    const key = f.startedAt.toISOString().slice(0, 10);
+    const key = new Date(f.startedAt).toISOString().slice(0, 10);
     const c = checkInsByDate.get(key);
     if (!c) continue;
     if (c.sleep === 'poor') flareDaysPoor.push(f.severity);
@@ -88,26 +91,24 @@ export async function computeInsights(userId: string) {
     insights.push({
       type: 'correlation',
       title: 'Poor sleep links to worse flares',
-      description: `${flareDaysPoor.length} of your flares happened on days you slept poorly. Their average severity was ${poorAvg.toFixed(
-        1
-      )}/10.`,
+      description: `${flareDaysPoor.length} of your flares happened on days you slept poorly. Their average severity was ${poorAvg.toFixed(1)}/10.`,
       data: { poor: flareDaysPoor, good: flareDaysGood },
       severity: 'warning',
     });
   }
 
-  // 4. Diet trigger detection — foods appearing <= 24h before a flare
+  // 4. Diet trigger detection — foods appearing ≤24h before a flare
   const triggerCounts = new Map<string, number>();
   for (const f of flares) {
-    const windowStart = +f.startedAt - day;
-    const windowEnd = +f.startedAt;
+    const windowStart = +new Date(f.startedAt) - day;
+    const windowEnd   = +new Date(f.startedAt);
     const recentMeals = dietLogs.filter(
-      (d) => +d.ateAt >= windowStart && +d.ateAt <= windowEnd
+      (d) => +new Date(d.ateAt) >= windowStart && +new Date(d.ateAt) <= windowEnd
     );
     for (const m of recentMeals) {
-      const foods = fromJson<string[]>(m.foods) ?? [];
-      for (const f of foods) {
-        triggerCounts.set(f, (triggerCounts.get(f) ?? 0) + 1);
+      const foods: string[] = Array.isArray(m.foods) ? m.foods : [];
+      for (const food of foods) {
+        triggerCounts.set(food, (triggerCounts.get(food) ?? 0) + 1);
       }
     }
   }
@@ -119,9 +120,7 @@ export async function computeInsights(userId: string) {
     insights.push({
       type: 'trigger',
       title: 'Possible food triggers',
-      description: `${suspectFoods
-        .map(([f, n]) => `${f} (${n}×)`)
-        .join(', ')} appeared in the 24h before a flare more than once.`,
+      description: `${suspectFoods.map(([f, n]) => `${f} (${n}×)`).join(', ')} appeared in the 24h before a flare more than once.`,
       data: Object.fromEntries(suspectFoods),
       severity: 'warning',
     });
@@ -129,17 +128,17 @@ export async function computeInsights(userId: string) {
 
   // 5. Stress ↔ severity correlation
   const highStress = checkIns.filter((c) => (c.stress ?? 0) >= 7);
-  const lowStress = checkIns.filter((c) => (c.stress ?? 0) <= 3);
+  const lowStress  = checkIns.filter((c) => (c.stress ?? 0) <= 3);
   const dateSeverity = new Map<string, number[]>();
   for (const s of symptoms) {
-    const k = s.loggedAt.toISOString().slice(0, 10);
+    const k = new Date(s.loggedAt).toISOString().slice(0, 10);
     if (!dateSeverity.has(k)) dateSeverity.set(k, []);
     dateSeverity.get(k)!.push(s.severity);
   }
-  const avgOn = (list: typeof checkIns) => {
+  const avgOn = (list: any[]) => {
     const sevs: number[] = [];
     for (const c of list) {
-      const arr = dateSeverity.get(c.date.toISOString().slice(0, 10));
+      const arr = dateSeverity.get(new Date(c.date).toISOString().slice(0, 10));
       if (arr) sevs.push(...arr);
     }
     return sevs.length ? sevs.reduce((a, b) => a + b, 0) / sevs.length : 0;
@@ -150,28 +149,32 @@ export async function computeInsights(userId: string) {
     insights.push({
       type: 'correlation',
       title: 'Stress amplifies symptoms',
-      description: `High-stress days show ${(hs - ls).toFixed(
-        1
-      )} points more symptom severity on average (${hs.toFixed(1)} vs ${ls.toFixed(1)}/10).`,
+      description: `High-stress days show ${(hs - ls).toFixed(1)} points more symptom severity on average (${hs.toFixed(1)} vs ${ls.toFixed(1)}/10).`,
       data: { highStressAvg: hs, lowStressAvg: ls },
       severity: 'warning',
     });
   }
 
-  // Persist
-  await prisma.insight.createMany({
-    data: insights.map((i) => ({
-      userId,
-      type: i.type,
-      title: i.title,
-      description: i.description,
-      data: toJson(i.data),
-      severity: i.severity ?? 'info',
-    })),
-  });
+  // Persist all computed insights
+  if (insights.length > 0) {
+    await supabase.from('Insight').insert(
+      insights.map((i) => ({
+        id: crypto.randomUUID(),
+        userId,
+        type: i.type,
+        title: i.title,
+        description: i.description,
+        data: i.data ?? null,
+        severity: i.severity ?? 'info',
+      }))
+    );
+  }
 
-  return prisma.insight.findMany({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
-  });
+  const result = await supabase
+    .from('Insight')
+    .select()
+    .eq('userId', userId)
+    .order('createdAt', { ascending: false });
+
+  return sb(result);
 }

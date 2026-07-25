@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { prisma, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 import { computeInsights } from '../services/insights.service';
 
@@ -8,12 +8,15 @@ insightsRouter.use(requireAuth);
 
 insightsRouter.get('/', async (req, res, next) => {
   try {
-    const items = await prisma.insight.findMany({
-      where: { userId: req.userId! },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
-    res.json(items.map((i) => ({ ...i, data: fromJson(i.data) })));
+    const items = sb(
+      await supabase
+        .from('Insight')
+        .select()
+        .eq('userId', req.userId!)
+        .order('createdAt', { ascending: false })
+        .limit(50)
+    );
+    res.json(items);
   } catch (e) {
     next(e);
   }

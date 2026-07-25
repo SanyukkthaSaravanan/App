@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const symptomsRouter = Router();
@@ -18,17 +18,16 @@ const createSchema = z.object({
 
 symptomsRouter.get('/', async (req, res, next) => {
   try {
-    const items = await prisma.symptom.findMany({
-      where: { userId: req.userId! },
-      orderBy: { loggedAt: 'desc' },
-      take: Number(req.query.limit ?? 200),
-    });
-    res.json(
-      items.map((s) => ({
-        ...s,
-        symptoms: fromJson<string[]>(s.symptoms) ?? [],
-      }))
+    const limit = Number(req.query.limit ?? 200);
+    const items = sb(
+      await supabase
+        .from('Symptom')
+        .select()
+        .eq('userId', req.userId!)
+        .order('loggedAt', { ascending: false })
+        .limit(limit)
     );
+    res.json(items);
   } catch (e) {
     next(e);
   }
@@ -37,19 +36,24 @@ symptomsRouter.get('/', async (req, res, next) => {
 symptomsRouter.post('/', async (req, res, next) => {
   try {
     const body = createSchema.parse(req.body);
-    const created = await prisma.symptom.create({
-      data: {
-        userId: req.userId!,
-        bodyPart: body.bodyPart ?? null,
-        bodyPartName: body.bodyPartName ?? null,
-        symptoms: toJson(body.symptoms)!,
-        severity: body.severity,
-        notes: body.notes,
-        view: body.view ?? null,
-        loggedAt: body.loggedAt ? new Date(body.loggedAt) : new Date(),
-      },
-    });
-    res.status(201).json({ ...created, symptoms: body.symptoms });
+    const created = sb(
+      await supabase
+        .from('Symptom')
+        .insert({
+          id: crypto.randomUUID(),
+          userId: req.userId!,
+          bodyPart: body.bodyPart ?? null,
+          bodyPartName: body.bodyPartName ?? null,
+          symptoms: body.symptoms,
+          severity: body.severity,
+          notes: body.notes ?? null,
+          view: body.view ?? null,
+          loggedAt: body.loggedAt ? new Date(body.loggedAt).toISOString() : new Date().toISOString(),
+        })
+        .select()
+        .single()
+    );
+    res.status(201).json(created);
   } catch (e) {
     next(e);
   }
@@ -57,9 +61,11 @@ symptomsRouter.post('/', async (req, res, next) => {
 
 symptomsRouter.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.symptom.deleteMany({
-      where: { id: req.params.id, userId: req.userId! },
-    });
+    await supabase
+      .from('Symptom')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('userId', req.userId!);
     res.status(204).end();
   } catch (e) {
     next(e);

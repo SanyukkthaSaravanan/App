@@ -1,7 +1,7 @@
 // =============================================================
 //  Flaire – database schema
-//  Provider: SQLite (single file, no external service needed)
-//  ORM:      Prisma
+//  Provider : PostgreSQL (Supabase)
+//  ORM      : Prisma
 // =============================================================
 
 generator client {
@@ -9,42 +9,44 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL")
 }
 
-// ---------- Account / profile ----------
+// ─────────────────────────────────────────────────────────────
+//  ACCOUNT & SESSION
+// ─────────────────────────────────────────────────────────────
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  username     String   @unique
+  id           String    @id @default(cuid())
+  email        String    @unique
+  username     String    @unique
   passwordHash String
   firstName    String?
   lastName     String?
   dateOfBirth  DateTime?
-  timezone     String   @default("UTC")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  // Profile / medical context
-  conditions   String?  // JSON array of diagnosis strings
-  allergies    String?  // JSON array
+  timezone     String    @default("UTC")
   avatarUrl    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   // Relations
+  sessions        Session[]
   symptoms        Symptom[]
   medications     Medication[]
   doseLogs        MedicationDose[]
   checkIns        DailyCheckIn[]
   dietLogs        DietLog[]
   flares          FlareEvent[]
+  labResults      LabResult[]
+  ocrDocuments    OcrDocument[]
+  diseaseProfiles DiseaseProfile[]
   medicalRecords  MedicalRecord[]
   posts           CommunityPost[]
   comments        CommunityComment[]
   insights        Insight[]
   calendarEvents  CalendarEvent[]
-  sessions        Session[]
 }
 
 model Session {
@@ -59,20 +61,37 @@ model Session {
   @@index([userId])
 }
 
-// ---------- Symptom tracking (body map + general) ----------
+// ─────────────────────────────────────────────────────────────
+//  1. SYMPTOM
+// ─────────────────────────────────────────────────────────────
+//
+//  Covers both body-map pin entries (bodyPart set) and general
+//  free-form entries (bodyPart null, e.g. fatigue, brain fog).
 
 model Symptom {
-  id          String   @id @default(cuid())
-  userId      String
-  // bodyPart is null for general / non-localized entries (e.g. fatigue)
-  bodyPart    String?
-  bodyPartName String?
-  // Either a single symptom name (for general) or multiple tags (for body-map)
-  symptoms    String    // JSON array of strings: e.g. ["Pain","Swelling"]
-  severity    Int       // 1..10
-  notes       String?
-  view        String?   // 'front' | 'side' | null
-  loggedAt    DateTime  @default(now())
+  id           String   @id @default(cuid())
+  userId       String
+
+  // Localisation (optional — null for systemic symptoms)
+  bodyPart     String?       // canonical key e.g. "left-knee"
+  bodyPartName String?       // display name e.g. "Left Knee"
+  view         String?       // "front" | "side"
+
+  // What was felt
+  symptoms     Json          // string[]  e.g. ["Pain","Swelling"]
+  severity     Int           // 1–10
+  duration     String?       // e.g. "2 hours", "all day", "intermittent"
+  timeOfDay    String?       // "morning" | "afternoon" | "evening" | "night"
+
+  // Context
+  aggravatingFactors  Json?  // string[]  e.g. ["Walking","Cold weather"]
+  relievingFactors    Json?  // string[]  e.g. ["Rest","Heat"]
+  associatedSymptoms  Json?  // string[]  co-occurring symptoms not on body map
+
+  // Provenance
+  entryMethod  String   @default("manual") // "manual" | "voice" | "nlp"
+  notes        String?
+  loggedAt     DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -80,37 +99,65 @@ model Symptom {
   @@index([userId, bodyPart])
 }
 
-// ---------- Medications ----------
+// ─────────────────────────────────────────────────────────────
+//  2. MEDICATION
+// ─────────────────────────────────────────────────────────────
 
 model Medication {
-  id           String   @id @default(cuid())
-  userId       String
-  name         String
-  dosage       String   // e.g. "200mg"
-  frequency    String   // e.g. "Twice daily"
-  timesPerDay  Int      @default(1)
-  scheduleTimes String  // JSON array of HH:mm strings
-  startDate    DateTime
-  endDate      DateTime?
-  color        String   @default("#7293BB")
-  notes        String?
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  id             String    @id @default(cuid())
+  userId         String
 
-  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  doses MedicationDose[]
+  // Identity
+  name           String              // brand name
+  genericName    String?             // generic / INN name
+  drugClass      String?             // e.g. "DMARD", "NSAID", "Biologic"
+  category       String?             // from medications.json e.g. "Autoimmune"
+
+  // Dosing
+  dosage         String              // e.g. "200 mg"
+  unit           String   @default("mg")  // mg | mcg | g | ml | units
+  frequency      String              // "Daily" | "Twice daily" | "Weekly" | etc.
+  timesPerDay    Int      @default(1)
+  scheduleTimes  Json                // string[]  e.g. ["08:00","20:00"]
+  withFood       Boolean  @default(false)
+  instructions   String?             // "Take with full glass of water"
+
+  // Lifecycle
+  prescribedBy   String?
+  pharmacy       String?
+  startDate      DateTime
+  endDate        DateTime?
+  refillDate     DateTime?
+  active         Boolean  @default(true)
+
+  // Safety & side-effects
+  sideEffectsReported Json?          // string[]  reported by this user
+  allergicReaction    Boolean @default(false)
+
+  color     String   @default("#7293BB")
+  notes     String?
+  createdAt DateTime @default(now())
+
+  // Provenance — set when this prescription was created from an OCR scan
+  source        String   @default("manual") // "manual" | "ocr"
+  ocrDocumentId String?
+
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doses       MedicationDose[]
+  ocrDocument OcrDocument?     @relation(fields: [ocrDocumentId], references: [id])
 
   @@index([userId, active])
+  @@index([ocrDocumentId])
 }
 
 model MedicationDose {
-  id            String    @id @default(cuid())
-  userId        String
-  medicationId  String
-  scheduledAt   DateTime
-  takenAt       DateTime?
-  skipped       Boolean   @default(false)
-  notes         String?
+  id           String    @id @default(cuid())
+  userId       String
+  medicationId String
+  scheduledAt  DateTime
+  takenAt      DateTime?
+  skipped      Boolean   @default(false)
+  notes        String?
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   medication Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
@@ -119,30 +166,204 @@ model MedicationDose {
   @@index([medicationId, scheduledAt])
 }
 
-// ---------- Daily check-in ----------
+// ─────────────────────────────────────────────────────────────
+//  3. LAB RESULT
+// ─────────────────────────────────────────────────────────────
+
+model LabResult {
+  id          String   @id @default(cuid())
+  userId      String
+
+  // Metadata
+  testName    String              // e.g. "Complete Blood Count", "ANA Panel"
+  testDate    DateTime
+  orderedBy   String?             // doctor / provider name
+  labName     String?             // lab facility
+
+  // Results — stored as an array of panel items
+  // Shape: [{ name, value, unit, referenceRange, flag }]
+  //   flag: "normal" | "low" | "high" | "critical"
+  panels      Json                // LabPanel[]
+
+  // Summary
+  interpretation String?          // doctor's or user's summary note
+  flagged        Boolean @default(false)  // true if any panel item is flagged
+
+  // Source file (optional — uploaded PDF / image)
+  fileUrl        String?
+  ocrDocumentId  String?          // linked OcrDocument if scanned
+
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ocrDocument OcrDocument? @relation(fields: [ocrDocumentId], references: [id])
+
+  @@index([userId, testDate])
+  @@index([userId, flagged])
+}
+
+// ─────────────────────────────────────────────────────────────
+//  4. FLARE EVENT
+// ─────────────────────────────────────────────────────────────
+
+model FlareEvent {
+  id        String    @id @default(cuid())
+  userId    String
+
+  // Timing
+  startedAt DateTime
+  endedAt   DateTime?
+  resolved  Boolean   @default(false)
+  durationHours Float?  // computed on resolve
+
+  // Severity & impact
+  severity         Int              // 1–10
+  functionalImpact String?          // "minimal" | "moderate" | "severe" | "bedridden"
+
+  // What was affected
+  locations  Json?                  // string[]  body parts
+  symptoms   Json?                  // string[]  symptoms during flare
+
+  // Likely triggers (multi-select)
+  triggers   Json?                  // string[]  e.g. ["Stress","Missed medication","Weather"]
+
+  // Environmental context
+  weather    String?                // "cold" | "hot" | "humid" | "rainy"
+  stressLevel Int?                  // 1–10
+  sleepNight  Float?                // hours slept the night before
+
+  // Interventions used
+  medicationsTried Json?            // string[]  meds used during flare
+  otherInterventions Json?          // string[]  e.g. ["Ice pack","Rest","Warm bath"]
+
+  // Outcome
+  treatmentResponse String?         // "helped" | "no change" | "made worse"
+  notes             String?
+
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([userId, resolved])
+}
+
+// ─────────────────────────────────────────────────────────────
+//  5. OCR DOCUMENT
+// ─────────────────────────────────────────────────────────────
+
+model OcrDocument {
+  id           String   @id @default(cuid())
+  userId       String
+
+  // Source
+  originalFileName String?          // original file name if uploaded
+  capturedAt   DateTime @default(now())
+  documentType String   @default("medication") // "medication" | "lab" | "prescription" | "other"
+
+  // OCR output
+  rawText      String               // full extracted text from Tesseract
+  confidence   Float?               // 0–1 Tesseract confidence score
+
+  // Parsed & structured data extracted from the raw text
+  // Shape depends on documentType:
+  //   medication: { name, generic, category, dose, frequency }
+  //   lab:        { testName, panels: [{ name, value, unit, referenceRange, flag }] }
+  parsedData   Json?
+
+  // Fuzzy-match candidates returned to the user
+  // Shape: [{ name, generic, category, score, dose }]
+  matchCandidates Json?
+
+  // Which candidate the user confirmed (null = not yet confirmed)
+  confirmedMatch  Json?
+
+  // Linked records
+  fileUrl      String?              // stored file URL (Supabase Storage or external)
+
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  labResults  LabResult[]
+  medications Medication[]
+
+  @@index([userId, documentType])
+  @@index([userId, capturedAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+//  6. DISEASE PROFILE
+// ─────────────────────────────────────────────────────────────
+
+model DiseaseProfile {
+  id          String   @id @default(cuid())
+  userId      String
+
+  // Diagnosis
+  name        String              // e.g. "Rheumatoid Arthritis"
+  icdCode     String?             // ICD-10 code e.g. "M05.9"
+  diagnosedAt DateTime?
+  diagnosedBy String?             // doctor / institution
+
+  // Status
+  status      String   @default("active") // "active" | "remission" | "monitoring" | "resolved"
+  severity    String?             // "mild" | "moderate" | "severe"
+
+  // Disease-specific details
+  subtype     String?             // e.g. "Seropositive RA", "Lupus nephritis"
+  affectedSystems Json?           // string[]  e.g. ["Joints","Skin","Kidneys"]
+
+  // Known personal triggers
+  triggers    Json?               // string[]  user-confirmed triggers
+
+  // Linked medications (just names — actual records live in Medication table)
+  currentMedications  Json?       // string[]
+  previousMedications Json?       // string[]
+
+  // Biomarker targets (disease-specific values to watch)
+  // Shape: [{ name, target, unit }]  e.g. [{ name: "CRP", target: "< 5", unit: "mg/L" }]
+  biomarkerTargets Json?
+
+  // Remission criteria / goals set with doctor
+  remissionCriteria String?
+
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId, status])
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SUPPORTING MODELS (unchanged structure, PostgreSQL-adapted)
+// ─────────────────────────────────────────────────────────────
 
 model DailyCheckIn {
-  id              String   @id @default(cuid())
-  userId          String
-  date            DateTime // date only — the day this check-in represents
-  energy          Int?     // 1..10
-  painIntensity   String?  // 'mild' | 'moderate' | 'severe'
-  painLocations   String?  // JSON array
-  painTypes       String?  // JSON array
-  flareStatus     String?  // 'no' | 'maybe' | 'yes'
-  flareSeverity   String?  // 'mild' | 'moderate' | 'severe'
-  sleep           String?  // 'poor' | 'okay' | 'good'
-  sleepHours      Float?
-  sleepDisrupted  Boolean  @default(false)
-  stress          Int?     // 1..10
-  mood            Int?     // 1..10
-  medsTaken       String?  // 'yes' | 'some' | 'no'
-  sideEffects     String?  // JSON array
-  gutIssues       String?  // JSON array
-  foodTriggers    String?  // JSON array
-  mobility        String?  // 'hard' | 'some-difficulty' | 'okay'
-  notes           String?
-  createdAt       DateTime @default(now())
+  id             String   @id @default(cuid())
+  userId         String
+  date           DateTime
+  energy         Int?
+  painIntensity  String?
+  painLocations  Json?
+  painTypes      Json?
+  flareStatus    String?
+  flareSeverity  String?
+  sleep          String?
+  sleepHours     Float?
+  sleepDisrupted Boolean  @default(false)
+  stress         Int?
+  mood           Int?
+  medsTaken      String?
+  sideEffects    Json?
+  gutIssues      Json?
+  foodTriggers   Json?
+  mobility       String?
+  notes          String?
+  createdAt      DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -150,53 +371,31 @@ model DailyCheckIn {
   @@index([userId, date])
 }
 
-// ---------- Diet tracker ----------
-
 model DietLog {
-  id         String   @id @default(cuid())
-  userId     String
-  mealType   String   // 'breakfast' | 'lunch' | 'dinner' | 'snack'
-  foods      String   // JSON array of food names
-  triggers   String?  // JSON array of suspected trigger foods
-  calories   Int?
-  notes      String?
-  ateAt      DateTime
+  id       String   @id @default(cuid())
+  userId   String
+  mealType String
+  foods    Json
+  triggers Json?
+  calories Int?
+  notes    String?
+  ateAt    DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, ateAt])
 }
 
-// ---------- Flare events ----------
-
-model FlareEvent {
-  id         String    @id @default(cuid())
-  userId     String
-  startedAt  DateTime
-  endedAt    DateTime?
-  severity   Int       // 1..10
-  triggers   String?   // JSON array
-  locations  String?   // JSON array of body parts affected
-  notes      String?
-  resolved   Boolean   @default(false)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, startedAt])
-}
-
-// ---------- Medical records ----------
-
 model MedicalRecord {
   id           String   @id @default(cuid())
   userId       String
   title        String
-  type         String   // 'lab' | 'imaging' | 'visit' | 'prescription' | 'other'
+  type         String
   providerName String?
   date         DateTime
-  fileUrl      String?  // stored file (or external link)
+  fileUrl      String?
   notes        String?
-  tags         String?  // JSON array
+  tags         Json?
   createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -204,13 +403,11 @@ model MedicalRecord {
   @@index([userId, date])
 }
 
-// ---------- Community ----------
-
 model CommunityPost {
   id        String   @id @default(cuid())
   userId    String
   content   String
-  tags      String?  // JSON array
+  tags      Json?
   likes     Int      @default(0)
   createdAt DateTime @default(now())
 
@@ -233,16 +430,14 @@ model CommunityComment {
   @@index([postId])
 }
 
-// ---------- Insights (computed patterns) ----------
-
 model Insight {
   id          String   @id @default(cuid())
   userId      String
-  type        String   // 'trigger' | 'pattern' | 'trend' | 'correlation'
+  type        String
   title       String
   description String
-  data        String?  // JSON payload for chart data
-  severity    String   @default("info") // 'info' | 'warning' | 'positive'
+  data        Json?
+  severity    String   @default("info")
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -250,17 +445,15 @@ model Insight {
   @@index([userId, createdAt])
 }
 
-// ---------- Calendar (aggregated event feed) ----------
-
 model CalendarEvent {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
-  type            String   // 'symptom' | 'medication' | 'checkin' | 'flare' | 'appointment'
+  type            String
   title           String
   date            DateTime
   endDate         DateTime?
   relatedEntityId String?
-  payload         String?  // JSON for extra detail
+  payload         Json?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { checkins as checkinsApi } from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -131,6 +132,12 @@ const defaultFactors: TrackingFactor[] = [
 
 export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOverviewProps) {
   const [hasCheckedIn, setHasCheckedIn] = useState(false);
+
+  useEffect(() => {
+    checkinsApi.today().then((list) => {
+      if (list.length > 0) setHasCheckedIn(true);
+    }).catch(() => {});
+  }, []);
   const [isFlareDay, setIsFlareDay] = useState(true);
   const [flareStartDate] = useState(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)); // 2 days ago
   const [showCheckInModal, setShowCheckInModal] = useState(false);
@@ -183,6 +190,13 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     if (checkInData.pain > 0) {
       setShowPainPrompt(true);
     }
+
+    checkinsApi.save({
+      energy: checkInData.energy || undefined,
+      stress: additionalData.stress || undefined,
+      sleep: additionalData.sleep === 1 ? 'poor' : additionalData.sleep === 5 ? 'good' : 'okay',
+      notes: checkInData.notes || undefined,
+    }).catch(console.error);
   };
 
   const handleCaregiverLogin = (e: React.FormEvent) => {

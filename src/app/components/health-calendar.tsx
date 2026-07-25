@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { calendar as calendarApi, type CalendarEvent } from '../../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -101,6 +102,20 @@ export function HealthCalendar() {
   const [currentDate, setCurrentDate] = useState(new Date(2025, 0, 1)); // January 2025
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
+
+  useEffect(() => {
+    const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0, 23, 59, 59);
+    calendarApi.list(start.toISOString(), end.toISOString()).then(setCalEvents).catch(console.error);
+  }, [currentDate]);
+
+  const eventsByDate = calEvents.reduce<Record<string, CalendarEvent[]>>((acc, ev) => {
+    const key = ev.date.slice(0, 10);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(ev);
+    return acc;
+  }, {});
 
   const getDaysInMonth = (date: Date) => {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
@@ -125,7 +140,27 @@ export function HealthCalendar() {
   const getDayData = (day: number): DayData | null => {
     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
     const key = formatDateKey(date);
-    return mockDayData[key] || null;
+    if (mockDayData[key]) return mockDayData[key];
+    const evs = eventsByDate[key];
+    if (!evs || evs.length === 0) return null;
+    // Build a DayData-shaped object from API events
+    const symptoms: DayData['symptoms'] = [];
+    const medications: DayData['medications'] = [];
+    const nutrition: DayData['nutrition'] = [];
+    const appointments: DayData['appointments'] = [];
+    let isFlareDay = false;
+    for (const ev of evs) {
+      if (ev.type === 'symptom') {
+        symptoms.push({ name: ev.title, severity: ev.severity });
+      } else if (ev.type === 'medication') {
+        medications.push({ name: ev.title, taken: true });
+      } else if (ev.type === 'flare') {
+        isFlareDay = true;
+      } else if (ev.type === 'appointment') {
+        appointments.push({ type: ev.title, time: '', provider: '' });
+      }
+    }
+    return { date, symptoms, medications, nutrition, appointments, isFlareDay };
   };
 
   const handleDayClick = (day: number) => {

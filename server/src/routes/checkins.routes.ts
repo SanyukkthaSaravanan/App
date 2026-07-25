@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb, sbMaybe } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const checkInsRouter = Router();
@@ -27,41 +27,21 @@ const schema = z.object({
   notes: z.string().optional(),
 });
 
-const arrayFields = [
-  'painLocations',
-  'painTypes',
-  'sideEffects',
-  'gutIssues',
-  'foodTriggers',
-] as const;
-
-const hydrate = (row: Record<string, unknown>) => {
-  const out = { ...row };
-  for (const k of arrayFields) {
-    out[k] = fromJson<string[]>(row[k] as string | null) ?? [];
-  }
-  return out;
-};
-
 checkInsRouter.get('/', async (req, res, next) => {
   try {
-    const { from, to } = req.query as { from?: string; to?: string };
-    const items = await prisma.dailyCheckIn.findMany({
-      where: {
-        userId: req.userId!,
-        ...(from || to
-          ? {
-              date: {
-                ...(from ? { gte: new Date(from) } : {}),
-                ...(to ? { lte: new Date(to) } : {}),
-              },
-            }
-          : {}),
-      },
-      orderBy: { date: 'desc' },
-      take: Number(req.query.limit ?? 365),
-    });
-    res.json(items.map(hydrate));
+    const { from, to, limit } = req.query as { from?: string; to?: string; limit?: string };
+    let query = supabase
+      .from('DailyCheckIn')
+      .select()
+      .eq('userId', req.userId!)
+      .order('date', { ascending: false })
+      .limit(Number(limit ?? 365));
+
+    if (from) query = query.gte('date', new Date(from).toISOString());
+    if (to) query = query.lte('date', new Date(to).toISOString());
+
+    const items = sb(await query);
+    res.json(items);
   } catch (e) {
     next(e);
   }
@@ -73,51 +53,61 @@ checkInsRouter.post('/', async (req, res, next) => {
     const date = body.date ? new Date(body.date) : new Date();
     // Normalize to start of day
     date.setHours(0, 0, 0, 0);
+    const dateIso = date.toISOString();
 
-    const created = await prisma.dailyCheckIn.upsert({
-      where: { userId_date: { userId: req.userId!, date } },
-      update: {
-        energy: body.energy,
-        painIntensity: body.painIntensity,
-        painLocations: toJson(body.painLocations),
-        painTypes: toJson(body.painTypes),
-        flareStatus: body.flareStatus,
-        flareSeverity: body.flareSeverity,
-        sleep: body.sleep,
-        sleepHours: body.sleepHours,
-        sleepDisrupted: body.sleepDisrupted ?? false,
-        stress: body.stress,
-        mood: body.mood,
-        medsTaken: body.medsTaken,
-        sideEffects: toJson(body.sideEffects),
-        gutIssues: toJson(body.gutIssues),
-        foodTriggers: toJson(body.foodTriggers),
-        mobility: body.mobility,
-        notes: body.notes,
-      },
-      create: {
-        userId: req.userId!,
-        date,
-        energy: body.energy,
-        painIntensity: body.painIntensity,
-        painLocations: toJson(body.painLocations),
-        painTypes: toJson(body.painTypes),
-        flareStatus: body.flareStatus,
-        flareSeverity: body.flareSeverity,
-        sleep: body.sleep,
-        sleepHours: body.sleepHours,
-        sleepDisrupted: body.sleepDisrupted ?? false,
-        stress: body.stress,
-        mood: body.mood,
-        medsTaken: body.medsTaken,
-        sideEffects: toJson(body.sideEffects),
-        gutIssues: toJson(body.gutIssues),
-        foodTriggers: toJson(body.foodTriggers),
-        mobility: body.mobility,
-        notes: body.notes,
-      },
-    });
-    res.status(201).json(hydrate(created as unknown as Record<string, unknown>));
+    const payload = {
+      userId: req.userId!,
+      date: dateIso,
+      energy: body.energy ?? null,
+      painIntensity: body.painIntensity ?? null,
+      painLocations: body.painLocations ?? [],
+      painTypes: body.painTypes ?? [],
+      flareStatus: body.flareStatus ?? null,
+      flareSeverity: body.flareSeverity ?? null,
+      sleep: body.sleep ?? null,
+      sleepHours: body.sleepHours ?? null,
+      sleepDisrupted: body.sleepDisrupted ?? false,
+      stress: body.stress ?? null,
+      mood: body.mood ?? null,
+      medsTaken: body.medsTaken ?? null,
+      sideEffects: body.sideEffects ?? [],
+      gutIssues: body.gutIssues ?? [],
+      foodTriggers: body.foodTriggers ?? [],
+      mobility: body.mobility ?? null,
+      notes: body.notes ?? null,
+    };
+
+    // Try to find existing check-in for this user+date
+    const existing = sbMaybe(
+      await supabase
+        .from('DailyCheckIn')
+        .select('id')
+        .eq('userId', req.userId!)
+        .eq('date', dateIso)
+        .single()
+    ) as { id: string } | null;
+
+    let result;
+    if (existing) {
+      result = sb(
+        await supabase
+          .from('DailyCheckIn')
+          .update(payload)
+          .eq('id', existing.id)
+          .select()
+          .single()
+      );
+    } else {
+      result = sb(
+        await supabase
+          .from('DailyCheckIn')
+          .insert({ id: crypto.randomUUID(), ...payload })
+          .select()
+          .single()
+      );
+    }
+
+    res.status(201).json(result);
   } catch (e) {
     next(e);
   }

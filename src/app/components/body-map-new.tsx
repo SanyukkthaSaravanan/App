@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { symptoms as symptomsApi, nlp } from '../../lib/api';
+import { useWhisper } from '../../hooks/useWhisper';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -66,35 +68,23 @@ const GENERAL_SYMPTOM_SUGGESTIONS = [
 
 export function BodyMapNew() {
   const [selectedView, setSelectedView] = useState<ViewType>('front');
-  const [symptoms, setSymptoms] = useState<BodyPartSymptom[]>([
-    {
-      id: '1',
-      part: 'left-knee',
-      partName: 'Left Knee',
-      symptoms: ['Pain', 'Swelling'],
-      severity: 7,
-      notes: '',
-      date: new Date(),
-    },
-    {
-      id: '2',
-      part: 'right-hand',
-      partName: 'Right Hand',
-      symptoms: ['Stiffness', 'Pain'],
-      severity: 5,
-      notes: '',
-      date: new Date(),
-    },
-    {
-      id: '3',
-      part: 'left-fingers',
-      partName: 'Left Fingers',
-      symptoms: ['Stiffness'],
-      severity: 6,
-      notes: '',
-      date: new Date(),
-    },
-  ]);
+  const [symptoms, setSymptoms] = useState<BodyPartSymptom[]>([]);
+
+  useEffect(() => {
+    symptomsApi.list().then((list) => {
+      setSymptoms(
+        list.map((s) => ({
+          id: s.id,
+          part: s.bodyPart,
+          partName: s.bodyPartName ?? s.bodyPart ?? 'General',
+          symptoms: s.symptoms,
+          severity: s.severity,
+          notes: s.notes ?? '',
+          date: new Date(s.loggedAt),
+        }))
+      );
+    }).catch(() => {});
+  }, []);
 
   // Dialog state for adding a symptom to a clicked body part
   const [activeHotspot, setActiveHotspot] = useState<Hotspot | null>(null);
@@ -107,7 +97,17 @@ export function BodyMapNew() {
   const [generalName, setGeneralName] = useState('');
   const [generalSeverity, setGeneralSeverity] = useState<number>(5);
   const [generalNotes, setGeneralNotes] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
+  const [nlpParsed, setNlpParsed] = useState(false);
+
+  const whisper = useWhisper({
+    onTranscript: (transcript) => {
+      setGeneralNotes((prev) => (prev ? prev + ' ' : '') + transcript);
+      applyNlpResult(transcript);
+    },
+    onError: (err) => console.warn('[STT]', err),
+  });
+  const isRecording = whisper.state === 'recording';
+  const isProcessing = whisper.state === 'processing';
 
   // Front view hotspots
   const frontHotspots: Hotspot[] = [
@@ -178,6 +178,7 @@ export function BodyMapNew() {
   };
 
   const removeSymptom = (id: string) => {
+    symptomsApi.remove(id).catch(() => {});
     setSymptoms(symptoms.filter((s) => s.id !== id));
   };
 
@@ -203,7 +204,7 @@ export function BodyMapNew() {
     );
   };
 
-  const saveSymptom = () => {
+  const saveSymptom = async () => {
     if (!activeHotspot || draftSymptoms.length === 0) return;
     const entry: BodyPartSymptom = {
       id: Date.now().toString(),
@@ -214,6 +215,17 @@ export function BodyMapNew() {
       notes: draftNotes.trim(),
       date: new Date(),
     };
+    try {
+      const created = await symptomsApi.create({
+        bodyPart: activeHotspot.id,
+        bodyPartName: activeHotspot.name,
+        symptoms: entry.symptoms,
+        severity: entry.severity,
+        notes: entry.notes,
+        view: selectedView,
+      });
+      entry.id = created.id;
+    } catch {}
     setSymptoms([entry, ...symptoms]);
     closeDialog();
   };
@@ -223,6 +235,7 @@ export function BodyMapNew() {
     setGeneralSeverity(5);
     setGeneralNotes('');
     setIsRecording(false);
+    setNlpParsed(false);
     setGeneralOpen(true);
   };
 
@@ -231,7 +244,7 @@ export function BodyMapNew() {
     setIsRecording(false);
   };
 
-  const saveGeneralSymptom = () => {
+  const saveGeneralSymptom = async () => {
     const name = generalName.trim();
     if (!name) return;
     const entry: BodyPartSymptom = {
@@ -243,64 +256,42 @@ export function BodyMapNew() {
       notes: generalNotes.trim(),
       date: new Date(),
     };
+    try {
+      const created = await symptomsApi.create({
+        bodyPart: null,
+        bodyPartName: 'General',
+        symptoms: [name],
+        severity: generalSeverity,
+        notes: generalNotes.trim(),
+      });
+      entry.id = created.id;
+    } catch {}
     setSymptoms([entry, ...symptoms]);
     closeGeneralDialog();
   };
 
-  // Voice input — uses Web Speech API when available, otherwise mocks a transcript
-  const toggleRecording = () => {
-    const w = window as typeof window & {
-      SpeechRecognition?: typeof window extends { SpeechRecognition: infer T } ? T : unknown;
-      webkitSpeechRecognition?: unknown;
-    };
-    const SpeechRecognition =
-      (w as any).SpeechRecognition || (w as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      // Mock fallback for browsers without Web Speech API
-      if (!isRecording) {
-        setIsRecording(true);
-        setTimeout(() => {
-          setGeneralNotes((prev) =>
-            (prev ? prev + ' ' : '') +
-            'Feeling drained since the afternoon, especially after meals.'
-          );
-          setIsRecording(false);
-        }, 1800);
-      } else {
-        setIsRecording(false);
-      }
-      return;
-    }
-
-    if (isRecording) {
-      setIsRecording(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results?.[0]?.[0]?.transcript ?? '';
-      if (transcript) {
-        setGeneralNotes((prev) =>
-          (prev ? prev + ' ' : '') + transcript
-        );
-      }
-    };
-    recognition.onend = () => setIsRecording(false);
-    recognition.onerror = () => setIsRecording(false);
-
+  // Apply NLP result to auto-fill general symptom form fields
+  const applyNlpResult = async (transcript: string) => {
     try {
-      recognition.start();
-      setIsRecording(true);
+      const result = await nlp.analyze(transcript);
+      if (result.symptoms.length > 0) {
+        setGeneralName(result.symptoms[0]);
+      }
+      if (result.severity !== null) {
+        setGeneralSeverity(result.severity);
+      }
+      if (result.bodyParts.length > 0) {
+        const bodyNote = `Body area: ${result.bodyParts.join(', ')}`;
+        setGeneralNotes((prev) => (prev ? prev + ' ' : '') + bodyNote);
+      }
+      setNlpParsed(true);
     } catch {
-      setIsRecording(false);
+      // NLP unavailable — notes already set from transcript, no-op
     }
   };
+
+  // Voice input — delegates to useWhisper (Whisper API → Web Speech fallback)
+  const toggleRecording = () => whisper.toggle();
 
   const skeletonImages: Record<ViewType, string> = {
     front: skeletonFront,
@@ -655,24 +646,36 @@ export function BodyMapNew() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="general-notes">Notes (optional)</Label>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={isRecording ? 'destructive' : 'outline'}
-                  onClick={toggleRecording}
-                >
-                  {isRecording ? (
-                    <>
-                      <MicOff className="h-4 w-4 mr-2" />
-                      Stop
-                    </>
-                  ) : (
-                    <>
-                      <Mic className="h-4 w-4 mr-2" />
-                      Voice input
-                    </>
+                <div className="flex items-center gap-2">
+                  {nlpParsed && (
+                    <span className="text-xs text-green-600 font-medium px-2 py-0.5 bg-green-50 border border-green-200 rounded-full">
+                      ✓ NLP parsed
+                    </span>
                   )}
-                </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={isRecording ? 'destructive' : 'outline'}
+                    onClick={toggleRecording}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                        Processing…
+                      </>
+                    ) : isRecording ? (
+                      <>
+                        <MicOff className="h-4 w-4 mr-2" />
+                        Stop
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="h-4 w-4 mr-2" />
+                        Voice input
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
               <Textarea
                 id="general-notes"
@@ -684,7 +687,13 @@ export function BodyMapNew() {
               {isRecording && (
                 <p className="text-sm text-muted-foreground flex items-center gap-2">
                   <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                  Listening…
+                  Listening… speak clearly, then press Stop
+                </p>
+              )}
+              {isProcessing && (
+                <p className="text-sm text-muted-foreground flex items-center gap-2">
+                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                  Transcribing with Whisper AI…
                 </p>
               )}
             </div>

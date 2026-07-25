@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { insights as insightsApi, type Insight } from '../../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -159,6 +160,15 @@ export function HealthInsights() {
     to: undefined,
   });
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [apiInsights, setApiInsights] = useState<Insight[]>([]);
+
+  useEffect(() => {
+    insightsApi.list().then(setApiInsights).catch(console.error);
+  }, []);
+
+  const handleRefreshInsights = () => {
+    insightsApi.refresh().then(setApiInsights).catch(console.error);
+  };
 
   const timePeriodLabels: Record<TimePeriod, string> = {
     days: 'Last 7 Days',
@@ -225,7 +235,12 @@ export function HealthInsights() {
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold mb-1">Health Trends & Insights</h3>
+              <div className="flex items-center gap-3 mb-1">
+                <h3 className="text-lg font-semibold">Health Trends & Insights</h3>
+                <Button size="sm" variant="outline" onClick={handleRefreshInsights}>
+                  Refresh insights
+                </Button>
+              </div>
               <p className="text-sm text-muted-foreground">
                 View your health patterns over time
               </p>
@@ -333,6 +348,46 @@ export function HealthInsights() {
           </div>
         </CardContent>
       </Card>
+
+      {/* API Insights Cards */}
+      {apiInsights.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {apiInsights.map((insight, idx) => (
+            <Card
+              key={insight.id}
+              className={`border-0 ${
+                insight.severity === 'positive'
+                  ? 'bg-green-50'
+                  : insight.severity === 'warning'
+                  ? 'bg-amber-50'
+                  : 'bg-blue-50'
+              } ${idx === 0 ? 'md:col-span-2' : ''}`}
+            >
+              <CardContent className="pt-6">
+                <div className="flex gap-3 items-start">
+                  <Badge
+                    style={{
+                      backgroundColor:
+                        insight.severity === 'positive'
+                          ? '#A5D3CF'
+                          : insight.severity === 'warning'
+                          ? '#F59E0B'
+                          : '#7293BB',
+                      color: 'white',
+                    }}
+                  >
+                    {insight.severity}
+                  </Badge>
+                  <div className="flex-1">
+                    <h4 className="mb-1">{insight.title}</h4>
+                    <p className="text-sm text-muted-foreground">{insight.description}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Insights Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

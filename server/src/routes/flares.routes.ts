@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const flaresRouter = Router();
@@ -18,17 +18,14 @@ const schema = z.object({
 
 flaresRouter.get('/', async (req, res, next) => {
   try {
-    const items = await prisma.flareEvent.findMany({
-      where: { userId: req.userId! },
-      orderBy: { startedAt: 'desc' },
-    });
-    res.json(
-      items.map((f) => ({
-        ...f,
-        triggers: fromJson<string[]>(f.triggers) ?? [],
-        locations: fromJson<string[]>(f.locations) ?? [],
-      }))
+    const items = sb(
+      await supabase
+        .from('FlareEvent')
+        .select()
+        .eq('userId', req.userId!)
+        .order('startedAt', { ascending: false })
     );
+    res.json(items);
   } catch (e) {
     next(e);
   }
@@ -37,18 +34,23 @@ flaresRouter.get('/', async (req, res, next) => {
 flaresRouter.post('/', async (req, res, next) => {
   try {
     const body = schema.parse(req.body);
-    const created = await prisma.flareEvent.create({
-      data: {
-        userId: req.userId!,
-        startedAt: new Date(body.startedAt),
-        endedAt: body.endedAt ? new Date(body.endedAt) : null,
-        severity: body.severity,
-        triggers: toJson(body.triggers ?? []),
-        locations: toJson(body.locations ?? []),
-        notes: body.notes,
-        resolved: body.resolved ?? false,
-      },
-    });
+    const created = sb(
+      await supabase
+        .from('FlareEvent')
+        .insert({
+          id: crypto.randomUUID(),
+          userId: req.userId!,
+          startedAt: new Date(body.startedAt).toISOString(),
+          endedAt: body.endedAt ? new Date(body.endedAt).toISOString() : null,
+          severity: body.severity,
+          triggers: body.triggers ?? [],
+          locations: body.locations ?? [],
+          notes: body.notes ?? null,
+          resolved: body.resolved ?? false,
+        })
+        .select()
+        .single()
+    );
     res.status(201).json(created);
   } catch (e) {
     next(e);
@@ -57,10 +59,11 @@ flaresRouter.post('/', async (req, res, next) => {
 
 flaresRouter.post('/:id/resolve', async (req, res, next) => {
   try {
-    await prisma.flareEvent.updateMany({
-      where: { id: req.params.id, userId: req.userId! },
-      data: { resolved: true, endedAt: new Date() },
-    });
+    await supabase
+      .from('FlareEvent')
+      .update({ resolved: true, endedAt: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .eq('userId', req.userId!);
     res.json({ ok: true });
   } catch (e) {
     next(e);

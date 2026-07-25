@@ -5,35 +5,78 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Heart, Mail, Lock, User, Chrome } from 'lucide-react';
+import { Mail, Lock, User, Chrome, AlertCircle, CheckCircle2 } from 'lucide-react';
 import fullLogoImage from '../../imports/Flaire_name_logo_updated.png';
 import { CursorGlow, FloatingParticles, FadeInView } from './motion-utils';
+import { useAuth } from '../../context/auth-context';
 
-interface AuthProps {
-  onLogin: (email: string, name: string) => void;
-}
-
-export function Auth({ onLogin }: AuthProps) {
+export function Auth() {
+  const { login, register } = useAuth();
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [signupName, setSignupName] = useState('');
+  const [signupUsername, setSignupUsername] = useState('');
+  const [signupFirstName, setSignupFirstName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('login');
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Real-time validation flags (only show errors after the user has typed something)
+  const usernameInvalid = signupUsername.length > 0 && (signupUsername.length < 3 || signupUsername.length > 32);
+  const passwordInvalid = signupPassword.length > 0 && signupPassword.length < 8;
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginEmail && loginPassword) {
-      // Mock login - just use email as name for simplicity
-      const name = loginEmail.split('@')[0];
-      onLogin(loginEmail, name);
+    if (!loginEmail || !loginPassword) return;
+    setError(''); setLoading(true);
+    try {
+      await login(loginEmail, loginPassword);
+    } catch (err: any) {
+      setError(err.message ?? 'Login failed. Check your credentials.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSignup = (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (signupName && signupEmail && signupPassword) {
-      onLogin(signupEmail, signupName);
+    if (!signupFirstName || !signupUsername || !signupEmail || !signupPassword) return;
+    if (signupUsername.length < 3 || signupUsername.length > 32) {
+      setError('Username must be 3–32 characters.');
+      return;
     }
+    if (signupPassword.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    setError(''); setSuccess(''); setLoading(true);
+    try {
+      await register(signupEmail, signupUsername, signupPassword, signupFirstName);
+      // Account created — do NOT auto-login. Send the user to the login tab
+      // to sign in with their new credentials.
+      setSuccess('Account created! Please log in with your new credentials.');
+      setLoginEmail(signupEmail);
+      setLoginPassword('');
+      setActiveTab('login');
+      // Clear the signup form
+      setSignupFirstName('');
+      setSignupUsername('');
+      setSignupEmail('');
+      setSignupPassword('');
+    } catch (err: any) {
+      setError(err.message ?? 'Registration failed. Try a different email or username.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Clear banners whenever the user switches tabs manually.
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    setError('');
+    if (value === 'signup') setSuccess('');
   };
 
   return (
@@ -77,7 +120,7 @@ export function Auth({ onLogin }: AuthProps) {
             <p className="text-sm text-muted-foreground mt-2">Find Rhythm in the Unpredictable</p>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="login" className="w-full">
+            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
               <TabsList className="grid w-full grid-cols-2 mb-6">
                 <TabsTrigger value="login">Login</TabsTrigger>
                 <TabsTrigger value="signup">Sign Up</TabsTrigger>
@@ -85,6 +128,12 @@ export function Auth({ onLogin }: AuthProps) {
 
               {/* Login Form */}
               <TabsContent value="login">
+                {success && (
+                  <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 mb-4">
+                    <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                    {success}
+                  </div>
+                )}
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="login-email">Email</Label>
@@ -116,34 +165,20 @@ export function Auth({ onLogin }: AuthProps) {
                       />
                     </div>
                   </div>
+                  {error && (
+                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                      {error}
+                    </div>
+                  )}
                   <Button
                     type="submit"
                     className="w-full mt-6"
                     size="lg"
+                    disabled={loading}
                     style={{ backgroundColor: '#7293BB' }}
                   >
-                    Log In
-                  </Button>
-                  <div className="relative my-4">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-gray-300"></div>
-                    </div>
-                    <div className="relative flex justify-center text-sm">
-                      <span className="px-2 bg-white text-muted-foreground">or</span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    size="lg"
-                    onClick={() => {
-                      // Mock Google login
-                      onLogin('google.user@example.com', 'Google User');
-                    }}
-                  >
-                    <Chrome className="mr-2 h-5 w-5" />
-                    Log In with Google
+                    {loading ? 'Logging in…' : 'Log In'}
                   </Button>
                 </form>
                 <div className="mt-4 text-center">
@@ -160,19 +195,39 @@ export function Auth({ onLogin }: AuthProps) {
               <TabsContent value="signup">
                 <form onSubmit={handleSignup} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="signup-name">Name</Label>
+                    <Label htmlFor="signup-firstname">First Name</Label>
                     <div className="relative">
                       <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                       <Input
-                        id="signup-name"
+                        id="signup-firstname"
                         type="text"
-                        placeholder="Your name"
+                        placeholder="Your first name"
                         className="pl-10"
-                        value={signupName}
-                        onChange={(e) => setSignupName(e.target.value)}
+                        value={signupFirstName}
+                        onChange={(e) => setSignupFirstName(e.target.value)}
                         required
                       />
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="signup-username">Username</Label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="signup-username"
+                        type="text"
+                        placeholder="e.g. flaire_maya"
+                        className={`pl-10 ${usernameInvalid ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                        value={signupUsername}
+                        onChange={(e) => setSignupUsername(e.target.value)}
+                        required
+                      />
+                    </div>
+                    {usernameInvalid ? (
+                      <p className="text-xs text-red-500">Username must be 3–32 characters</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">3–32 characters</p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="signup-email">Email</Label>
@@ -197,41 +252,32 @@ export function Auth({ onLogin }: AuthProps) {
                         id="signup-password"
                         type="password"
                         placeholder="••••••••"
-                        className="pl-10"
+                        className={`pl-10 ${passwordInvalid ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
                         value={signupPassword}
                         onChange={(e) => setSignupPassword(e.target.value)}
                         required
                       />
                     </div>
+                    {passwordInvalid ? (
+                      <p className="text-xs text-red-500">Password must be at least 8 characters</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Minimum 8 characters</p>
+                    )}
                   </div>
+                  {error && (
+                    <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                      {error}
+                    </div>
+                  )}
                   <Button
                     type="submit"
                     className="w-full mt-6"
                     size="lg"
+                    disabled={loading}
                     style={{ backgroundColor: '#7293BB' }}
                   >
-                    Create Account
-                  </Button>
-                  <div className="relative my-4">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-gray-300"></div>
-                    </div>
-                    <div className="relative flex justify-center text-sm">
-                      <span className="px-2 bg-white text-muted-foreground">or</span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    size="lg"
-                    onClick={() => {
-                      // Mock Google signup
-                      onLogin('google.user@example.com', 'Google User');
-                    }}
-                  >
-                    <Chrome className="mr-2 h-5 w-5" />
-                    Sign Up with Google
+                    {loading ? 'Creating account…' : 'Create Account'}
                   </Button>
                 </form>
                 <p className="text-xs text-center text-muted-foreground mt-4">

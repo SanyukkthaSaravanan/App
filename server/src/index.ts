@@ -13,6 +13,9 @@ import { medicalRecordsRouter } from './routes/medical-records.routes';
 import { communityRouter } from './routes/community.routes';
 import { insightsRouter } from './routes/insights.routes';
 import { calendarRouter } from './routes/calendar.routes';
+import { nlpRouter } from './routes/nlp.routes';
+import { sttRouter } from './routes/stt.routes';
+import { ocrRouter } from './routes/ocr.routes';
 
 const app = express();
 
@@ -40,6 +43,9 @@ app.use('/api/medical-records', medicalRecordsRouter);
 app.use('/api/community', communityRouter);
 app.use('/api/insights', insightsRouter);
 app.use('/api/calendar', calendarRouter);
+app.use('/api/nlp', nlpRouter);
+app.use('/api/stt', sttRouter);
+app.use('/api/ocr', ocrRouter);
 
 // 404
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));

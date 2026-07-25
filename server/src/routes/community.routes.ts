@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const communityRouter = Router();
@@ -17,20 +17,40 @@ const commentSchema = z.object({
 
 communityRouter.get('/posts', async (_req, res, next) => {
   try {
-    const posts = await prisma.communityPost.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-      include: {
-        user: { select: { username: true, firstName: true, avatarUrl: true } },
-        comments: {
-          orderBy: { createdAt: 'asc' },
-          include: {
-            user: { select: { username: true, firstName: true, avatarUrl: true } },
-          },
-        },
-      },
-    });
-    res.json(posts.map((p) => ({ ...p, tags: fromJson<string[]>(p.tags) ?? [] })));
+    // Fetch posts
+    const posts = sb(
+      await supabase
+        .from('CommunityPost')
+        .select('*, user:User(username, firstName, avatarUrl)')
+        .order('createdAt', { ascending: false })
+        .limit(50)
+    );
+
+    // Fetch comments for those posts and attach user info
+    const postIds = posts.map((p: any) => p.id);
+    const comments = postIds.length
+      ? sb(
+          await supabase
+            .from('CommunityComment')
+            .select('*, user:User(username, firstName, avatarUrl)')
+            .in('postId', postIds)
+            .order('createdAt', { ascending: true })
+        )
+      : [];
+
+    // Group comments by postId
+    const commentsByPost: Record<string, any[]> = {};
+    for (const c of comments) {
+      if (!commentsByPost[c.postId]) commentsByPost[c.postId] = [];
+      commentsByPost[c.postId].push(c);
+    }
+
+    res.json(
+      posts.map((p: any) => ({
+        ...p,
+        comments: commentsByPost[p.id] ?? [],
+      }))
+    );
   } catch (e) {
     next(e);
   }
@@ -39,14 +59,20 @@ communityRouter.get('/posts', async (_req, res, next) => {
 communityRouter.post('/posts', async (req, res, next) => {
   try {
     const body = postSchema.parse(req.body);
-    const created = await prisma.communityPost.create({
-      data: {
-        userId: req.userId!,
-        content: body.content,
-        tags: toJson(body.tags ?? []),
-      },
-    });
-    res.status(201).json({ ...created, tags: body.tags ?? [] });
+    const created = sb(
+      await supabase
+        .from('CommunityPost')
+        .insert({
+          id: crypto.randomUUID(),
+          userId: req.userId!,
+          content: body.content,
+          tags: body.tags ?? [],
+          likes: 0,
+        })
+        .select()
+        .single()
+    );
+    res.status(201).json(created);
   } catch (e) {
     next(e);
   }
@@ -54,11 +80,23 @@ communityRouter.post('/posts', async (req, res, next) => {
 
 communityRouter.post('/posts/:id/like', async (req, res, next) => {
   try {
-    const updated = await prisma.communityPost.update({
-      where: { id: req.params.id },
-      data: { likes: { increment: 1 } },
-    });
-    res.json({ likes: updated.likes });
+    // Fetch current likes then increment
+    const { data: post, error } = await supabase
+      .from('CommunityPost')
+      .select('likes')
+      .eq('id', req.params.id)
+      .single();
+    if (error || !post) return res.status(404).json({ error: 'Post not found' });
+
+    const updated = sb(
+      await supabase
+        .from('CommunityPost')
+        .update({ likes: (post.likes ?? 0) + 1 })
+        .eq('id', req.params.id)
+        .select('likes')
+        .single()
+    );
+    res.json({ likes: (updated as any).likes });
   } catch (e) {
     next(e);
   }
@@ -67,13 +105,18 @@ communityRouter.post('/posts/:id/like', async (req, res, next) => {
 communityRouter.post('/posts/:id/comments', async (req, res, next) => {
   try {
     const body = commentSchema.parse(req.body);
-    const created = await prisma.communityComment.create({
-      data: {
-        postId: req.params.id,
-        userId: req.userId!,
-        content: body.content,
-      },
-    });
+    const created = sb(
+      await supabase
+        .from('CommunityComment')
+        .insert({
+          id: crypto.randomUUID(),
+          postId: req.params.id,
+          userId: req.userId!,
+          content: body.content,
+        })
+        .select()
+        .single()
+    );
     res.status(201).json(created);
   } catch (e) {
     next(e);

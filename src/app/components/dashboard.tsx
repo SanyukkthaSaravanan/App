@@ -1,4 +1,7 @@
 import React, { useState } from 'react';
+import { useAuth } from '../../context/auth-context';
+import { nlp } from '../../lib/api';
+import { useWhisper } from '../../hooks/useWhisper';
 import { motion, AnimatePresence } from 'motion/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { DashboardOverview } from './dashboard-overview';
@@ -41,10 +44,10 @@ import butterflyImage from 'figma:asset/56fc79b5210ad4c78090a1c41123eebc3fc3af82
 
 interface DashboardProps {
   userName: string;
-  onLogout: () => void;
 }
 
-export function Dashboard({ userName, onLogout }: DashboardProps) {
+export function Dashboard({ userName }: DashboardProps) {
+  const { logout: onLogout } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isFlareMode, setIsFlareMode] = useState(false);
@@ -56,7 +59,12 @@ export function Dashboard({ userName, onLogout }: DashboardProps) {
     }
   ]);
   const [inputMessage, setInputMessage] = useState('');
-  const [isListening, setIsListening] = useState(false);
+  const chatWhisper = useWhisper({
+    onTranscript: (text) => setInputMessage(text),
+    onError: (err) => console.warn('[Chat STT]', err),
+  });
+  const isListening = chatWhisper.state === 'recording';
+  const isChatProcessing = chatWhisper.state === 'processing';
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
 
   const navigation = [
@@ -135,19 +143,56 @@ export function Dashboard({ userName, onLogout }: DashboardProps) {
     setInputMessage('');
     setUploadedImage(null);
 
-    // Simulate assistant response based on whether it's an image or text
-    setTimeout(() => {
-      let response = '';
-      
-      if (uploadedImage) {
+    // For image uploads keep the existing random response behaviour
+    if (uploadedImage) {
+      setTimeout(() => {
         const imageResponses = [
           "I can see this is a medication bottle. Let me help you add this to your medications. The label shows it's a prescription medication. Would you like me to log this?",
           "This appears to be a food item. I can help you track this in your diet log. Should I add this to today's meals?",
           "I can see some symptoms or skin condition in this image. Would you like me to log this in your symptom tracker with today's date?",
           "This looks like a medical document or lab result. I can help you save this to your Medical Records. Would you like to proceed?",
         ];
-        response = imageResponses[Math.floor(Math.random() * imageResponses.length)];
-      } else {
+        const response = imageResponses[Math.floor(Math.random() * imageResponses.length)];
+        setChatMessages([
+          ...newMessages,
+          { role: 'assistant' as const, content: response }
+        ]);
+      }, 1000);
+      return;
+    }
+
+    // For text messages, call NLP and generate a contextual response
+    const textToAnalyze = inputMessage;
+    (async () => {
+      let response = '';
+      try {
+        const result = await nlp.analyze(textToAnalyze);
+        switch (result.intent) {
+          case 'log_symptom':
+            response = `I can see you're describing symptoms${result.bodyParts.length ? ` in your ${result.bodyParts.join(', ')}` : ''}${result.severity ? ` with severity ${result.severity}/10` : ''}. Would you like me to log this to your symptom tracker?`;
+            break;
+          case 'log_medication':
+            response = `I noticed you mentioned ${result.medications.map((m) => m.name + (m.dose ? ' ' + m.dose : '')).join(', ')}. Shall I add this to your medication log?`;
+            break;
+          case 'log_diet':
+            response = `I picked up on ${result.foods.join(', ')} from your message. Want me to add this to your diet tracker?`;
+            break;
+          case 'log_mood':
+            response = `Thanks for sharing how you're feeling. Your emotional wellbeing matters — I've noted the ${result.sentiment} tone. Shall I log a mood check-in?`;
+            break;
+          default: {
+            const responses = [
+              "I can help you with that! Would you like me to navigate you to the relevant section?",
+              "Let me assist you with logging that information. I'll guide you through the steps.",
+              "Great question! I can help you track that. Would you like to add it now?",
+              "I understand. Let me show you where you can find that in the app.",
+              "I can definitely help with that. What specific details would you like to log?"
+            ];
+            response = responses[Math.floor(Math.random() * responses.length)];
+          }
+        }
+      } catch {
+        // NLP unavailable — fall back to random generic response
         const responses = [
           "I can help you with that! Would you like me to navigate you to the relevant section?",
           "Let me assist you with logging that information. I'll guide you through the steps.",
@@ -157,53 +202,15 @@ export function Dashboard({ userName, onLogout }: DashboardProps) {
         ];
         response = responses[Math.floor(Math.random() * responses.length)];
       }
-      
       setChatMessages([
         ...newMessages,
         { role: 'assistant' as const, content: response }
       ]);
-    }, 1000);
+    })();
   };
 
-  const handleVoiceInput = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Speech recognition is not supported in your browser. Please try Chrome or Edge.');
-      return;
-    }
-
-    if (isListening) {
-      setIsListening(false);
-      return;
-    }
-
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    const recognition = new SpeechRecognition();
-    
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    recognition.onstart = () => {
-      setIsListening(true);
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setInputMessage(transcript);
-      setIsListening(false);
-    };
-
-    recognition.onerror = (event: any) => {
-      console.error('Speech recognition error:', event.error);
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognition.start();
-  };
+  // Delegates to useWhisper (Whisper API → Web Speech fallback)
+  const handleVoiceInput = () => chatWhisper.toggle();
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -442,7 +449,13 @@ export function Dashboard({ userName, onLogout }: DashboardProps) {
                   <div className="w-1 h-4 bg-current animate-pulse" style={{ animationDelay: '150ms' }}></div>
                   <div className="w-1 h-4 bg-current animate-pulse" style={{ animationDelay: '300ms' }}></div>
                 </div>
-                <span>Listening...</span>
+                <span>Listening… speak clearly, then press Stop</span>
+              </div>
+            )}
+            {isChatProcessing && (
+              <div className="mb-3 flex items-center gap-2 text-sm text-blue-500">
+                <span className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                <span>Transcribing with Whisper AI…</span>
               </div>
             )}
             <div className="flex items-center gap-2">
@@ -450,11 +463,16 @@ export function Dashboard({ userName, onLogout }: DashboardProps) {
                 onClick={handleVoiceInput}
                 size="icon"
                 variant="outline"
+                disabled={isChatProcessing}
                 className={isListening ? 'border-2' : ''}
                 style={isListening ? { borderColor: '#B48CBF', color: '#B48CBF' } : {}}
-                title="Voice input"
+                title={isChatProcessing ? 'Transcribing…' : isListening ? 'Stop recording' : 'Voice input (Whisper AI)'}
               >
-                {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                {isChatProcessing
+                  ? <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  : isListening
+                  ? <MicOff className="h-4 w-4" />
+                  : <Mic className="h-4 w-4" />}
               </Button>
               
               <label className="cursor-pointer">

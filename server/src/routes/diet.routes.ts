@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma, toJson, fromJson } from '../db';
+import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 
 export const dietRouter = Router();
@@ -17,18 +17,16 @@ const schema = z.object({
 
 dietRouter.get('/', async (req, res, next) => {
   try {
-    const items = await prisma.dietLog.findMany({
-      where: { userId: req.userId! },
-      orderBy: { ateAt: 'desc' },
-      take: Number(req.query.limit ?? 200),
-    });
-    res.json(
-      items.map((d) => ({
-        ...d,
-        foods: fromJson<string[]>(d.foods) ?? [],
-        triggers: fromJson<string[]>(d.triggers) ?? [],
-      }))
+    const limit = Number(req.query.limit ?? 200);
+    const items = sb(
+      await supabase
+        .from('DietLog')
+        .select()
+        .eq('userId', req.userId!)
+        .order('ateAt', { ascending: false })
+        .limit(limit)
     );
+    res.json(items);
   } catch (e) {
     next(e);
   }
@@ -37,18 +35,23 @@ dietRouter.get('/', async (req, res, next) => {
 dietRouter.post('/', async (req, res, next) => {
   try {
     const body = schema.parse(req.body);
-    const created = await prisma.dietLog.create({
-      data: {
-        userId: req.userId!,
-        mealType: body.mealType,
-        foods: toJson(body.foods)!,
-        triggers: toJson(body.triggers ?? []),
-        calories: body.calories,
-        notes: body.notes,
-        ateAt: body.ateAt ? new Date(body.ateAt) : new Date(),
-      },
-    });
-    res.status(201).json({ ...created, foods: body.foods, triggers: body.triggers ?? [] });
+    const created = sb(
+      await supabase
+        .from('DietLog')
+        .insert({
+          id: crypto.randomUUID(),
+          userId: req.userId!,
+          mealType: body.mealType,
+          foods: body.foods,
+          triggers: body.triggers ?? [],
+          calories: body.calories ?? null,
+          notes: body.notes ?? null,
+          ateAt: body.ateAt ? new Date(body.ateAt).toISOString() : new Date().toISOString(),
+        })
+        .select()
+        .single()
+    );
+    res.status(201).json(created);
   } catch (e) {
     next(e);
   }

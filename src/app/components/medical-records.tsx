@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { medicalRecords as recordsApi } from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -29,56 +30,22 @@ interface MedicalRecord {
 }
 
 export function MedicalRecords() {
-  const [records] = useState<MedicalRecord[]>([
-    {
-      id: '1',
-      type: 'lab',
-      title: 'Blood Work - CRP & RF',
-      date: new Date('2025-01-05'),
-      provider: 'City Medical Lab',
-      size: '2.3 MB',
-    },
-    {
-      id: '2',
-      type: 'imaging',
-      title: 'Hand X-Ray Results',
-      date: new Date('2024-12-20'),
-      provider: 'Radiology Center',
-      size: '8.1 MB',
-    },
-    {
-      id: '3',
-      type: 'notes',
-      title: 'Rheumatologist Follow-up Notes',
-      date: new Date('2025-01-20'),
-      provider: 'Dr. Sarah Johnson',
-      size: '156 KB',
-    },
-    {
-      id: '4',
-      type: 'lab',
-      title: 'Complete Blood Count',
-      date: new Date('2024-11-15'),
-      provider: 'City Medical Lab',
-      size: '1.8 MB',
-    },
-    {
-      id: '5',
-      type: 'reports',
-      title: 'Annual Health Summary',
-      date: new Date('2024-12-31'),
-      provider: 'Dr. Michael Chen',
-      size: '3.2 MB',
-    },
-    {
-      id: '6',
-      type: 'prescriptions',
-      title: 'Medication Prescriptions',
-      date: new Date('2025-01-10'),
-      provider: 'Dr. Sarah Johnson',
-      size: '512 KB',
-    },
-  ]);
+  const [records, setRecords] = useState<MedicalRecord[]>([]);
+
+  useEffect(() => {
+    recordsApi.list().then((list) => {
+      setRecords(
+        list.map((r) => ({
+          id: r.id,
+          type: r.type as any,
+          title: r.title,
+          date: new Date(r.date),
+          provider: r.providerName,
+          size: undefined,
+        }))
+      );
+    }).catch(() => {});
+  }, []);
 
   const [selectedType, setSelectedType] = useState<string>('all');
 

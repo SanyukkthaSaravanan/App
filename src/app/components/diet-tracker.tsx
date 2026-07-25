@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { diet as dietApi } from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -38,26 +39,23 @@ const commonTriggers = [
 ];
 
 export function DietTracker() {
-  const [entries, setEntries] = useState<FoodEntry[]>([
-    {
-      id: '1',
-      name: 'Oatmeal with berries',
-      category: 'Breakfast',
-      time: '8:00 AM',
-      reaction: 'positive',
-      notes: 'Felt good, no issues',
-      date: new Date(),
-    },
-    {
-      id: '2',
-      name: 'Coffee',
-      category: 'Beverage',
-      time: '8:30 AM',
-      reaction: 'negative',
-      notes: 'Increased joint pain after 2 hours',
-      date: new Date(),
-    },
-  ]);
+  const [entries, setEntries] = useState<FoodEntry[]>([]);
+
+  useEffect(() => {
+    dietApi.list().then((list) => {
+      setEntries(
+        list.map((d) => ({
+          id: d.id,
+          name: d.foods.join(', '),
+          category: d.mealType as any,
+          time: new Date(d.ateAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+          reaction: d.triggers.length ? 'negative' : 'neutral',
+          notes: d.notes ?? '',
+          date: new Date(d.ateAt),
+        }))
+      );
+    }).catch(() => {});
+  }, []);
   const [showAddForm, setShowAddForm] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [newEntry, setNewEntry] = useState({
@@ -78,7 +76,7 @@ export function DietTracker() {
   const [showAddTrigger, setShowAddTrigger] = useState(false);
   const [newTrigger, setNewTrigger] = useState('');
 
-  const addEntry = () => {
+  const addEntry = async () => {
     if (!newEntry.name) return;
 
     const entry: FoodEntry = {
@@ -90,6 +88,17 @@ export function DietTracker() {
       notes: newEntry.notes,
       date: new Date(),
     };
+
+    try {
+      const created = await dietApi.create({
+        mealType: newEntry.category.toLowerCase() as any,
+        foods: [newEntry.name],
+        triggers: newEntry.reaction === 'negative' ? [newEntry.name] : [],
+        notes: newEntry.notes,
+        ateAt: new Date().toISOString(),
+      });
+      entry.id = created.id;
+    } catch {}
 
     setEntries([entry, ...entries]);
     
@@ -109,6 +118,7 @@ export function DietTracker() {
   };
 
   const removeEntry = (id: string) => {
+    dietApi.remove(id).catch(() => {});
     setEntries(entries.filter((e) => e.id !== id));
   };
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { flares as flaresApi } from '../../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -65,6 +66,13 @@ export function FlareMode({ onExit, userName }: FlareModeProps) {
   const handleQuickLog = () => {
     setHasLogged(true);
     setTimeout(() => setHasLogged(false), 3000);
+    flaresApi.create({
+      startedAt: new Date().toISOString(),
+      severity: painLevel,
+      triggers: [],
+      locations: [],
+      notes: `${symptomNotes}\n${mealLog}`.trim(),
+    }).catch(console.error);
   };
 
   return (

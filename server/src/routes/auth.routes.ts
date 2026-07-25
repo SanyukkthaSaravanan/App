@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../db';
+import { supabase, sb, sbMaybe } from '../lib/supabase';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { signToken } from '../utils/token';
 import { requireAuth } from '../middleware/auth';
@@ -25,24 +25,42 @@ const loginSchema = z.object({
 authRouter.post('/register', async (req, res, next) => {
   try {
     const body = registerSchema.parse(req.body);
-    const existing = await prisma.user.findFirst({
-      where: { OR: [{ email: body.email }, { username: body.username }] },
-    });
-    if (existing) throw new HttpError(409, 'Email or username already in use');
 
-    const user = await prisma.user.create({
-      data: {
-        email: body.email,
-        username: body.username,
-        passwordHash: await hashPassword(body.password),
-        firstName: body.firstName,
-        lastName: body.lastName,
-      },
-    });
-    const token = signToken({ userId: user.id, email: user.email });
+    // Check for existing user by email or username
+    const existingByEmail = sbMaybe(
+      await supabase.from('User').select('id').eq('email', body.email).single()
+    );
+    const existingByUsername = sbMaybe(
+      await supabase.from('User').select('id').eq('username', body.username).single()
+    );
+    if (existingByEmail) {
+      throw new HttpError(409, 'An account with this email already exists. Try logging in instead.');
+    }
+    if (existingByUsername) {
+      throw new HttpError(409, 'This username is already taken. Please choose another.');
+    }
+
+    const user = sb(
+      await supabase
+        .from('User')
+        .insert({
+          id: crypto.randomUUID(),
+          email: body.email,
+          username: body.username,
+          passwordHash: await hashPassword(body.password),
+          firstName: body.firstName ?? null,
+          lastName: body.lastName ?? null,
+          updatedAt: new Date().toISOString(),
+        })
+        .select()
+        .single()
+    );
+
+    const u = user as any;
+    const token = signToken({ userId: u.id, email: u.email });
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, username: user.username },
+      user: { id: u.id, email: u.email, username: u.username },
     });
   } catch (e) {
     next(e);
@@ -55,15 +73,28 @@ authRouter.post('/login', async (req, res, next) => {
     if (!body.email && !body.username) {
       throw new HttpError(400, 'Email or username required');
     }
-    const user = await prisma.user.findFirst({
-      where: body.email ? { email: body.email } : { username: body.username },
-    });
+
+    const query = body.email
+      ? supabase.from('User').select().eq('email', body.email).single()
+      : supabase.from('User').select().eq('username', body.username!).single();
+
+    const user = sbMaybe(await query);
     if (!user) throw new HttpError(401, 'Invalid credentials');
 
     const ok = await verifyPassword(body.password, user.passwordHash);
     if (!ok) throw new HttpError(401, 'Invalid credentials');
 
     const token = signToken({ userId: user.id, email: user.email });
+
+    // Persist session
+    await supabase.from('Session').insert({
+      id: crypto.randomUUID(),
+      userId: user.id,
+      token,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
     res.json({
       token,
       user: {
@@ -81,24 +112,30 @@ authRouter.post('/login', async (req, res, next) => {
 
 authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId! },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        firstName: true,
-        lastName: true,
-        dateOfBirth: true,
-        timezone: true,
-        conditions: true,
-        allergies: true,
-        avatarUrl: true,
-        createdAt: true,
-      },
-    });
+    const user = sbMaybe(
+      await supabase
+        .from('User')
+        .select(
+          'id, email, username, firstName, lastName, dateOfBirth, timezone, avatarUrl, createdAt'
+        )
+        .eq('id', req.userId!)
+        .single()
+    );
     if (!user) throw new HttpError(404, 'User not found');
     res.json({ user });
+  } catch (e) {
+    next(e);
+  }
+});
+
+authRouter.post('/logout', requireAuth, async (req, res, next) => {
+  try {
+    const header = req.header('authorization') ?? req.header('Authorization') ?? '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (token) {
+      await supabase.from('Session').delete().eq('token', token);
+    }
+    res.json({ ok: true });
   } catch (e) {
     next(e);
   }

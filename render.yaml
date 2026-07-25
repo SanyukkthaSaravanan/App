@@ -1,0 +1,30 @@
+# Render blueprint for the Flaire backend (Express API).
+# Deploy: Render dashboard → New → Blueprint → connect this repo.
+# Render auto-detects this file; set the `sync: false` secrets in the dashboard.
+services:
+  - type: web
+    name: flaire-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: JWT_EXPIRES_IN
+        value: "7d"
+      # Secrets — set these in the Render dashboard (never commit them):
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Set this to your Vercel frontend URL after the frontend is deployed,
+      # e.g. https://flaire.vercel.app  (comma-separate multiple origins)
+      - key: CORS_ORIGIN
+        sync: false

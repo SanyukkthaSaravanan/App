@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { community as communityApi, type CommunityPost } from '../../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -227,11 +228,61 @@ const channels = [
 export function Community() {
   const [selectedChannel, setSelectedChannel] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [posts, setPosts] = useState<ForumPost[]>([]);
+
+  useEffect(() => {
+    communityApi.posts().then((apiPosts) => {
+      setPosts(
+        apiPosts.map((p) => ({
+          id: p.id,
+          channel: (p.tags?.[0] ?? 'all') as any,
+          author: p.user.firstName ?? p.user.username,
+          authorInitials:
+            (p.user.firstName?.[0] ?? p.user.username[0]).toUpperCase() +
+            (p.user.username[1] ?? '').toUpperCase(),
+          title: p.content.split('\n')[0].slice(0, 80),
+          content: p.content,
+          likes: p.likes,
+          replies: p.comments.length,
+          timestamp: new Date(p.createdAt).toLocaleDateString(),
+          isPinned: false,
+        }))
+      );
+    }).catch(console.error);
+  }, []);
+
+  const handleLike = (id: string) => {
+    communityApi.likePost(id).then(() => {
+      setPosts((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, likes: p.likes + 1 } : p))
+      );
+    }).catch(console.error);
+  };
+
+  const handleNewPost = (content: string) => {
+    communityApi.createPost(content).then((p) => {
+      const newPost: ForumPost = {
+        id: p.id,
+        channel: (p.tags?.[0] ?? 'all') as any,
+        author: p.user.firstName ?? p.user.username,
+        authorInitials:
+          (p.user.firstName?.[0] ?? p.user.username[0]).toUpperCase() +
+          (p.user.username[1] ?? '').toUpperCase(),
+        title: p.content.split('\n')[0].slice(0, 80),
+        content: p.content,
+        likes: p.likes,
+        replies: p.comments.length,
+        timestamp: new Date(p.createdAt).toLocaleDateString(),
+        isPinned: false,
+      };
+      setPosts((prev) => [newPost, ...prev]);
+    }).catch(console.error);
+  };
 
   const filteredPosts =
     selectedChannel === 'all'
-      ? mockPosts
-      : mockPosts.filter((post) => post.channel === selectedChannel);
+      ? posts
+      : posts.filter((post) => post.channel === selectedChannel);
 
   const currentChannel = channels.find((c) => c.id === selectedChannel);
 
@@ -281,6 +332,10 @@ export function Community() {
             <Button
               variant="outline"
               className="bg-white text-[#7293BB] border-0 hover:bg-white/90"
+              onClick={() => {
+                const content = window.prompt('What would you like to share with the community?');
+                if (content && content.trim()) handleNewPost(content.trim());
+              }}
             >
               <Plus className="h-4 w-4 mr-2" />
               New Post
@@ -410,7 +465,7 @@ export function Community() {
                             {post.content}
                           </p>
                           <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                            <button className="flex items-center gap-1 hover:text-[#7293BB] transition-colors">
+                            <button className="flex items-center gap-1 hover:text-[#7293BB] transition-colors" onClick={() => handleLike(post.id)}>
                               <Heart className="h-4 w-4" />
                               <span>{post.likes}</span>
                             </button>
