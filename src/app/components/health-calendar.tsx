@@ -82,11 +82,18 @@ export function HealthCalendar() {
       if (ev.type === 'symptom') {
         symptoms.push({ name: ev.title, severity: ev.severity });
       } else if (ev.type === 'medication') {
-        medications.push({ name: ev.title, taken: true });
+        const taken = (ev.payload as any)?.taken ?? true;
+        medications.push({ name: ev.title, taken });
       } else if (ev.type === 'flare') {
         isFlareDay = true;
       } else if (ev.type === 'appointment') {
         appointments.push({ type: ev.title, time: '', provider: '' });
+      } else if (ev.type === 'diet') {
+        const p = ev.payload as any;
+        nutrition.push({
+          meal: p?.mealType ? String(p.mealType) : 'Meal',
+          items: Array.isArray(p?.foods) && p.foods.length ? p.foods : [ev.title],
+        });
       }
     }
     return { date, symptoms, medications, nutrition, appointments, isFlareDay };

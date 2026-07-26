@@ -27,7 +27,7 @@ calendarRouter.get('/', async (req, res, next) => {
       return query;
     };
 
-    const [symptoms, checkIns, doses, meds, flares, records] = await Promise.all([
+    const [symptoms, checkIns, doses, meds, flares, records, dietLogs] = await Promise.all([
       sb(await withRange(supabase.from('Symptom').select().eq('userId', userId), 'loggedAt')),
       sb(await withRange(supabase.from('DailyCheckIn').select().eq('userId', userId), 'date')),
       sb(
@@ -40,6 +40,7 @@ calendarRouter.get('/', async (req, res, next) => {
       sb(await supabase.from('Medication').select('id, name, color').eq('userId', userId)),
       sb(await withRange(supabase.from('FlareEvent').select().eq('userId', userId), 'startedAt')),
       sb(await withRange(supabase.from('MedicalRecord').select().eq('userId', userId), 'date')),
+      sb(await withRange(supabase.from('DietLog').select().eq('userId', userId), 'ateAt')),
     ]);
 
     // Build a quick lookup for medication details
@@ -99,6 +100,19 @@ calendarRouter.get('/', async (req, res, next) => {
         title: r.title,
         severity: 0,
         payload: { providerName: r.providerName, recordType: r.type },
+      })),
+      ...(dietLogs as any[]).map((d: any) => ({
+        id: d.id,
+        type: 'diet' as const,
+        date: d.ateAt,
+        title: Array.isArray(d.foods) ? d.foods.join(', ') : 'Meal',
+        severity: 0,
+        payload: {
+          mealType: d.mealType,
+          foods: Array.isArray(d.foods) ? d.foods : [],
+          triggers: Array.isArray(d.triggers) ? d.triggers : [],
+          notes: d.notes,
+        },
       })),
     ].sort((a, b) => +new Date(a.date) - +new Date(b.date));
 

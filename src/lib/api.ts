@@ -200,6 +200,8 @@ export interface CheckIn {
   foodTriggers?: string[];
   mobility?: 'hard' | 'some-difficulty' | 'okay';
   notes?: string;
+  factors?: Record<string, number>;
+  partOfDay?: 'morning' | 'afternoon' | 'evening';
 }
 
 export const checkins = {
@@ -330,7 +332,7 @@ export const insights = {
 // ── Calendar ───────────────────────────────────────────────────────────────────
 export interface CalendarEvent {
   id: string;
-  type: 'symptom' | 'checkin' | 'medication' | 'flare' | 'appointment';
+  type: 'symptom' | 'checkin' | 'medication' | 'flare' | 'appointment' | 'diet';
   date: string;
   endDate?: string;
   title: string;

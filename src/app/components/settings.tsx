@@ -8,6 +8,7 @@ import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
 import { Plus, X, Check, SlidersHorizontal } from 'lucide-react';
 import { useAuth } from '../../context/auth-context';
+import { markerFor } from '../../lib/trackers';
 
 const BASE_FACTORS = [
   'Pain', 'Fatigue / Energy', 'Sleep', 'Mood', 'Stress',
@@ -137,10 +138,13 @@ export function Settings() {
             {allFactors.map((label) => (
               <label
                 key={label}
-                className="flex items-center gap-2 p-2 rounded-lg border cursor-pointer hover:bg-gray-50"
+                className="flex items-start gap-2 p-2 rounded-lg border cursor-pointer hover:bg-gray-50"
               >
-                <Checkbox checked={factors.includes(label)} onCheckedChange={() => toggleFactor(label)} />
-                <span className="text-sm">{label}</span>
+                <Checkbox checked={factors.includes(label)} onCheckedChange={() => toggleFactor(label)} className="mt-0.5" />
+                <span className="leading-tight">
+                  <span className="text-sm block">{label}</span>
+                  <span className="text-[10px] text-muted-foreground">{markerFor(label)}</span>
+                </span>
               </label>
             ))}
           </div>

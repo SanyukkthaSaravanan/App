@@ -4,6 +4,9 @@ import {
   symptoms as symptomsApi,
   medications as medsApi,
 } from '../../lib/api';
+import { useAuth } from '../../context/auth-context';
+import { DailyCheckInModal } from './daily-checkin-modal';
+import { trackerFor, TRACKERS } from '../../lib/trackers';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -146,17 +149,28 @@ interface WeekSeries {
   stress: number[];
 }
 
-export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOverviewProps) {
-  const [hasCheckedIn, setHasCheckedIn] = useState(false);
+const MAX_CHECKINS_PER_DAY = 3;
+
+export function DashboardOverview({ onNavigate }: DashboardOverviewProps) {
+  const { user } = useAuth();
+  const [todayCount, setTodayCount] = useState(0);
   const [medsToday, setMedsToday] = useState<{ taken: number; total: number } | null>(null);
+
+  // Factors chosen in onboarding/settings drive the check-in (default if none).
+  const checkinTrackers = (
+    user?.trackedFactors && user.trackedFactors.length > 0
+      ? user.trackedFactors.map(trackerFor)
+      : [trackerFor('Fatigue / Energy'), trackerFor('Pain'), trackerFor('Mood')]
+  );
   const [weekSeries, setWeekSeries] = useState<WeekSeries>({
     energy: [], pain: [], sleep: [], stress: [],
   });
 
+  const refreshTodayCount = () =>
+    checkinsApi.today().then((list) => setTodayCount(list.length)).catch(() => {});
+
   useEffect(() => {
-    checkinsApi.today().then((list) => {
-      if (list.length > 0) setHasCheckedIn(true);
-    }).catch(() => {});
+    refreshTodayCount();
 
     // Medication count for the dashboard card (Task 4)
     medsApi
@@ -208,18 +222,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     });
   }, []);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
-  const [checkInStep, setCheckInStep] = useState(1);
-  const [showCheckInData, setShowCheckInData] = useState(false);
-  const [showPainPrompt, setShowPainPrompt] = useState(false);
-  const [activeTab, setActiveTab] = useState('checkin');
-  const [trackingFactors, setTrackingFactors] = useState<TrackingFactor[]>(defaultFactors);
-  const [additionalData, setAdditionalData] = useState<Record<string, any>>({});
-  const [checkInData, setCheckInData] = useState({
-    energy: 0,
-    pain: 5,
-    mood: 0,
-    notes: '',
-  });
 
   const today = new Date();
   const todayStr = today.toLocaleDateString('en-US', {
@@ -228,73 +230,12 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     day: 'numeric',
   });
 
-  const handleCheckInComplete = () => {
-    setHasCheckedIn(true);
+  const atCheckinLimit = todayCount >= MAX_CHECKINS_PER_DAY;
+
+  const handleCheckInSaved = () => {
     setShowCheckInModal(false);
-    setCheckInStep(1);
-    setActiveTab('checkin'); // Reset to checkin tab
-
-    // Check if pain level is greater than 0
-    if (checkInData.pain > 0) {
-      setShowPainPrompt(true);
-    }
-
-    checkinsApi.save({
-      energy: checkInData.energy || undefined,
-      stress: additionalData.stress || undefined,
-      sleep: additionalData.sleep === 1 ? 'poor' : additionalData.sleep === 5 ? 'good' : 'okay',
-      notes: checkInData.notes || undefined,
-    }).catch(console.error);
+    refreshTodayCount();
   };
-
-  const hasEnabledFactors = trackingFactors.filter(f => f.enabled).length > 0;
-  const totalSteps = hasEnabledFactors ? 5 : 4; // 5 steps if we have additional tracking, 4 otherwise
-
-  const nextStep = () => {
-    if (checkInStep < totalSteps) {
-      // Skip step 4 if no enabled factors
-      if (checkInStep === 3 && !hasEnabledFactors) {
-        setCheckInStep(5); // Jump to notes
-      } else {
-        setCheckInStep(checkInStep + 1);
-      }
-    } else {
-      handleCheckInComplete();
-    }
-  };
-
-  const prevStep = () => {
-    if (checkInStep > 1) {
-      // Skip step 4 when going back if no enabled factors
-      if (checkInStep === 5 && !hasEnabledFactors) {
-        setCheckInStep(3); // Jump back to mood
-      } else {
-        setCheckInStep(checkInStep - 1);
-      }
-    }
-  };
-
-  const getPainColor = (value: number) => {
-    if (value <= 3) return '#A5D3CF'; // mint
-    if (value <= 7) return '#F59E0B'; // amber
-    return '#E89BA1'; // pink
-  };
-
-  const energyLevels = [
-    { emoji: '😴', label: 'Exhausted', value: 1 },
-    { emoji: '😪', label: 'Tired', value: 2 },
-    { emoji: '😐', label: 'Okay', value: 3 },
-    { emoji: '🙂', label: 'Good', value: 4 },
-    { emoji: '⚡', label: 'Energized', value: 5 },
-  ];
-
-  const moodLevels = [
-    { emoji: '😢', label: 'Very Low', value: 1 },
-    { emoji: '😞', label: 'Low', value: 2 },
-    { emoji: '😐', label: 'Okay', value: 3 },
-    { emoji: '🙂', label: 'Good', value: 4 },
-    { emoji: '😄', label: 'Great', value: 5 },
-  ];
 
   return (
     <div className="space-y-6">
@@ -310,410 +251,40 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
           <p className="text-sm text-muted-foreground">{todayStr}</p>
         </CardHeader>
         <CardContent className="pt-2">
-          {hasCheckedIn && showCheckInData ? (
-            // View logged check-in data
-            <div className="space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl">Today's Check-in</h3>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowCheckInData(false)}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {/* Energy */}
-              <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Zap className="h-5 w-5" style={{ color: '#A5D3CF' }} />
-                  <span className="font-medium">Energy</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {checkInData.energy > 0 && (
-                    <>
-                      <span className="text-2xl">{energyLevels[checkInData.energy - 1].emoji}</span>
-                      <span className="text-sm text-muted-foreground">{energyLevels[checkInData.energy - 1].label}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Pain */}
-              <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-5 w-5" style={{ color: '#E89BA1' }} />
-                  <span className="font-medium">Pain Level</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className="text-2xl font-bold"
-                    style={{ color: getPainColor(checkInData.pain) }}
-                  >
-                    {checkInData.pain}
-                  </span>
-                  <span className="text-sm text-muted-foreground">/ 10</span>
-                </div>
-              </div>
-
-              {/* Mood */}
-              <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Heart className="h-5 w-5" style={{ color: '#B48CBF' }} />
-                  <span className="font-medium">Mood</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {checkInData.mood > 0 && (
-                    <>
-                      <span className="text-2xl">{moodLevels[checkInData.mood - 1].emoji}</span>
-                      <span className="text-sm text-muted-foreground">{moodLevels[checkInData.mood - 1].label}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Notes */}
-              {checkInData.notes && (
-                <div className="p-3 bg-muted/30 rounded-lg">
-                  <div className="flex items-start gap-2 mb-2">
-                    <FileText className="h-5 w-5 mt-0.5" style={{ color: '#7293BB' }} />
-                    <span className="font-medium">Notes</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground pl-7">{checkInData.notes}</p>
-                </div>
-              )}
-
-              {/* Additional Tracking Factors */}
-              {Object.keys(additionalData).length > 0 && (
-                <div className="space-y-3 mt-6 pt-4 border-t">
-                  <h4 className="font-medium text-sm text-muted-foreground">Additional Tracking</h4>
-                  {trackingFactors.filter(f => additionalData[f.id] !== undefined).map((factor) => {
-                    const value = additionalData[factor.id];
-                    
-                    return (
-                      <div key={factor.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{factor.icon}</span>
-                          <span className="font-medium">{factor.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {factor.inputType === 'checkbox' && (
-                            <Badge 
-                              variant="outline" 
-                              style={{ 
-                                backgroundColor: value ? `${factor.color}20` : '#f3f4f6',
-                                borderColor: value ? factor.color : '#e5e7eb',
-                                color: value ? factor.color : '#6b7280'
-                              }}
-                            >
-                              {value ? 'Yes' : 'No'}
-                            </Badge>
-                          )}
-                          {factor.inputType === 'slider' && (
-                            <>
-                              <span 
-                                className="text-xl font-bold"
-                                style={{ color: factor.color }}
-                              >
-                                {value}
-                              </span>
-                              <span className="text-sm text-muted-foreground">
-                                {factor.id === 'water' ? 'glasses' : `/ ${factor.max}`}
-                              </span>
-                            </>
-                          )}
-                          {factor.inputType === 'emoji' && factor.emojiOptions && (
-                            <>
-                              <span className="text-2xl">
-                                {factor.emojiOptions.find(opt => opt.value === value)?.emoji}
-                              </span>
-                              <span className="text-sm text-muted-foreground">
-                                {factor.emojiOptions.find(opt => opt.value === value)?.label}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            // Default check-in view
-            <div className="text-center space-y-4">
-              <h3 className="text-xl">
-                {hasCheckedIn ? "You've checked in today ✓" : 'Check in'}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                {hasCheckedIn ? 'Come back tomorrow' : 'Takes seconds'}
-              </p>
-              {hasCheckedIn ? (
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => setShowCheckInData(true)}
-                >
-                  View today's check-in
-                </Button>
-              ) : (
-                <Button
-                  size="lg"
-                  className="w-full"
-                  style={{ backgroundColor: '#7293BB' }}
-                  onClick={() => setShowCheckInModal(true)}
-                >
-                  Check in
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="text-center space-y-4">
+            <h3 className="text-xl">
+              {todayCount === 0
+                ? 'How are you doing?'
+                : atCheckinLimit
+                ? "You've checked in 3 times today ✓"
+                : `Checked in ${todayCount}/${MAX_CHECKINS_PER_DAY} today`}
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              {atCheckinLimit
+                ? 'Come back tomorrow'
+                : 'Log how you feel — takes seconds. You can check in up to 3 times a day.'}
+            </p>
+            <Button
+              size="lg"
+              className="w-full"
+              style={{ backgroundColor: '#7293BB' }}
+              onClick={() => setShowCheckInModal(true)}
+              disabled={atCheckinLimit}
+            >
+              {todayCount === 0 ? 'Check in' : 'Check in again'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
       </motion.div>
 
-      {/* 4-Step Check-In Modal */}
-      <Dialog open={showCheckInModal} onOpenChange={setShowCheckInModal}>
-        <DialogContent className="max-w-[600px] rounded-[28px] p-0 max-h-[90vh] overflow-hidden flex flex-col">
-          <VisuallyHidden>
-            <DialogTitle>Daily Health Check-in</DialogTitle>
-            <DialogDescription>
-              Complete a check-in to log your health data and manage tracking settings
-            </DialogDescription>
-          </VisuallyHidden>
-
-          {/* Daily Check-in (tracker customisation now lives in Settings) */}
-          <Tabs value="checkin" className="flex-1 flex flex-col">
-            <TabsContent value="checkin" className="flex-1 overflow-y-auto p-8 pt-4">
-              <div className="space-y-6">
-                {/* Core Check-in Steps */}
-                {checkInStep === 1 && (
-                  <div className="space-y-6">
-                    <div className="text-center">
-                      <h2 className="text-2xl font-semibold mb-2">How's your energy?</h2>
-                      <p className="text-sm text-muted-foreground">Select how you're feeling</p>
-                    </div>
-                    <div className="flex justify-center gap-3">
-                      {energyLevels.map((level) => (
-                        <button
-                          key={level.value}
-                          onClick={() => setCheckInData({ ...checkInData, energy: level.value })}
-                          className={`flex flex-col items-center gap-2 p-4 rounded-2xl transition-all ${
-                            checkInData.energy === level.value
-                              ? 'bg-[#7293BB] text-white scale-110'
-                              : 'bg-gray-100 hover:bg-gray-200'
-                          }`}
-                        >
-                          <span className="text-3xl">{level.emoji}</span>
-                          <span className="text-xs">{level.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {checkInStep === 2 && (
-                  <div className="space-y-6">
-                    <div className="text-center">
-                      <h2 className="text-2xl font-semibold mb-2">Pain level?</h2>
-                      <p className="text-sm text-muted-foreground">0 is no pain, 10 is worst pain</p>
-                    </div>
-                    <div className="space-y-4">
-                      <div
-                        className="text-6xl font-bold text-center"
-                        style={{ color: getPainColor(checkInData.pain) }}
-                      >
-                        {checkInData.pain}
-                      </div>
-                      <Slider
-                        value={[checkInData.pain]}
-                        onValueChange={(value) => setCheckInData({ ...checkInData, pain: value[0] })}
-                        max={10}
-                        step={1}
-                        className="w-full"
-                      />
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>0 - No pain</span>
-                        <span>10 - Worst pain</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {checkInStep === 3 && (
-                  <div className="space-y-6">
-                    <div className="text-center">
-                      <h2 className="text-2xl font-semibold mb-2">How's your mood?</h2>
-                      <p className="text-sm text-muted-foreground">Select how you're feeling emotionally</p>
-                    </div>
-                    <div className="flex justify-center gap-3">
-                      {moodLevels.map((level) => (
-                        <button
-                          key={level.value}
-                          onClick={() => setCheckInData({ ...checkInData, mood: level.value })}
-                          className={`flex flex-col items-center gap-2 p-4 rounded-2xl transition-all ${
-                            checkInData.mood === level.value
-                              ? 'bg-[#7293BB] text-white scale-110'
-                              : 'bg-gray-100 hover:bg-gray-200'
-                          }`}
-                        >
-                          <span className="text-3xl">{level.emoji}</span>
-                          <span className="text-xs">{level.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Additional Tracking Factors */}
-                {checkInStep === 4 && (
-                  <div className="space-y-6">
-                    {trackingFactors.filter(f => f.enabled).length > 0 && (
-                      <div className="space-y-4">
-                        <div className="text-center mb-6">
-                          <h2 className="text-2xl font-semibold mb-2">Additional tracking</h2>
-                          <p className="text-sm text-muted-foreground">Track your customized factors</p>
-                        </div>
-                        {trackingFactors.filter(f => f.enabled).map((factor) => (
-                          <div key={factor.id} className="space-y-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-2xl">{factor.icon}</span>
-                              <span className="font-medium">{factor.name}</span>
-                            </div>
-                            
-                            {factor.inputType === 'checkbox' && (
-                              <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg">
-                                <span className="text-sm">Did you have {factor.name.toLowerCase()} today?</span>
-                                <Switch
-                                  checked={additionalData[factor.id] || false}
-                                  onCheckedChange={(checked) => 
-                                    setAdditionalData({ ...additionalData, [factor.id]: checked })
-                                  }
-                                />
-                              </div>
-                            )}
-                            
-                            {factor.inputType === 'slider' && (
-                              <div className="space-y-3">
-                                <div className="text-center">
-                                  <span 
-                                    className="text-4xl font-bold"
-                                    style={{ color: factor.color }}
-                                  >
-                                    {additionalData[factor.id] ?? Math.floor((factor.max! - factor.min!) / 2)}
-                                  </span>
-                                  {factor.id === 'water' && <span className="text-sm ml-2 text-muted-foreground">glasses</span>}
-                                </div>
-                                <Slider
-                                  value={[additionalData[factor.id] ?? Math.floor((factor.max! - factor.min!) / 2)]}
-                                  onValueChange={(value) => 
-                                    setAdditionalData({ ...additionalData, [factor.id]: value[0] })
-                                  }
-                                  min={factor.min}
-                                  max={factor.max}
-                                  step={1}
-                                  className="w-full"
-                                />
-                                <div className="flex justify-between text-xs text-muted-foreground">
-                                  <span>{factor.min}</span>
-                                  <span>{factor.max}</span>
-                                </div>
-                              </div>
-                            )}
-                            
-                            {factor.inputType === 'emoji' && factor.emojiOptions && (
-                              <div className="flex justify-center gap-2">
-                                {factor.emojiOptions.map((option) => (
-                                  <button
-                                    key={option.value}
-                                    onClick={() => 
-                                      setAdditionalData({ ...additionalData, [factor.id]: option.value })
-                                    }
-                                    className={`flex flex-col items-center gap-1 p-3 rounded-xl transition-all ${
-                                      additionalData[factor.id] === option.value
-                                        ? 'scale-110'
-                                        : 'opacity-60 hover:opacity-100'
-                                    }`}
-                                    style={{
-                                      backgroundColor: additionalData[factor.id] === option.value ? factor.color : '#f3f4f6',
-                                      color: additionalData[factor.id] === option.value ? 'white' : 'inherit',
-                                    }}
-                                  >
-                                    <span className="text-2xl">{option.emoji}</span>
-                                    <span className="text-xs">{option.label}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Step 5: Notes */}
-                {checkInStep === 5 && (
-                  <div className="space-y-6">
-                    <div className="text-center">
-                      <h2 className="text-2xl font-semibold mb-2">Any notes?</h2>
-                      <p className="text-sm text-muted-foreground">Optional - add anything you'd like to remember</p>
-                    </div>
-                    <div className="space-y-3">
-                      <Textarea
-                        placeholder="How are you feeling today? Any observations..."
-                        value={checkInData.notes}
-                        onChange={(e) => setCheckInData({ ...checkInData, notes: e.target.value })}
-                        rows={4}
-                        className="resize-none"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Step Dots */}
-                <div className="flex justify-center gap-2 mt-8 mb-6">
-                  {[1, 2, 3, trackingFactors.filter(f => f.enabled).length > 0 ? 4 : null, 5].filter(Boolean).map((step, idx, arr) => (
-                    <div
-                      key={step}
-                      className={`h-2 rounded-full transition-all ${
-                        step === checkInStep
-                          ? 'w-8 bg-[#7293BB]'
-                          : (step ?? 0) < checkInStep
-                          ? 'w-2 bg-[#7293BB]'
-                          : 'w-2 bg-gray-300'
-                      }`}
-                    />
-                  ))}
-                </div>
-
-                {/* Navigation Buttons */}
-                <div className="flex gap-3">
-                  {checkInStep > 1 && (
-                    <Button
-                      variant="outline"
-                      onClick={prevStep}
-                      className="flex-1"
-                    >
-                      <ChevronLeft className="h-4 w-4 mr-2" />
-                      Back
-                    </Button>
-                  )}
-                  <Button
-                    onClick={nextStep}
-                    className="flex-1"
-                    style={{ backgroundColor: '#7293BB' }}
-                  >
-                    {checkInStep === 5 ? 'Complete' : 'Continue'}
-                    {checkInStep < 5 && <ChevronRight className="h-4 w-4 ml-2" />}
-                  </Button>
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </DialogContent>
-      </Dialog>
+      {/* Dynamic daily check-in (factors from onboarding/settings) */}
+      <DailyCheckInModal
+        open={showCheckInModal}
+        onOpenChange={setShowCheckInModal}
+        trackers={checkinTrackers}
+        onSaved={handleCheckInSaved}
+      />
 
       {/* Core Symptom Snapshot - Last 7 Days (real logged data) */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
@@ -919,59 +490,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
         </Card>
       )}
 
-      {/* Pain Logging Prompt Dialog */}
-      <Dialog open={showPainPrompt} onOpenChange={setShowPainPrompt}>
-        <DialogContent className="max-w-[440px] rounded-[28px] p-0">
-          <VisuallyHidden>
-            <DialogTitle>Log Pain Details</DialogTitle>
-            <DialogDescription>
-              You mentioned experiencing pain. Would you like to log more details about it?
-            </DialogDescription>
-          </VisuallyHidden>
-          <div className="relative">
-            {/* Close button */}
-            <button
-              onClick={() => setShowPainPrompt(false)}
-              className="absolute top-4 right-4 z-10 p-2 rounded-full hover:bg-gray-100"
-            >
-              <X className="h-4 w-4" />
-            </button>
-
-            <div className="p-8 text-center space-y-6">
-              {/* Pain icon */}
-              <div
-                className="w-16 h-16 rounded-full mx-auto flex items-center justify-center"
-                style={{ backgroundColor: '#E89BA1' }}
-              >
-                <Activity className="h-8 w-8 text-white" />
-              </div>
-
-              {/* Message */}
-              <div className="space-y-2">
-                <h2 className="text-2xl font-semibold">
-                  You have mentioned a pain level of {checkInData.pain}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Do you want to log the pain?
-                </p>
-              </div>
-
-              {/* Yes button */}
-              <Button
-                size="lg"
-                className="w-full"
-                style={{ backgroundColor: '#7293BB' }}
-                onClick={() => {
-                  setShowPainPrompt(false);
-                  onNavigate('symptoms');
-                }}
-              >
-                Yes, log pain details
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );

@@ -8,6 +8,7 @@ import { Checkbox } from './ui/checkbox';
 import { Badge } from './ui/badge';
 import { ChevronRight, ChevronLeft, X, Plus, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../context/auth-context';
+import { markerFor } from '../../lib/trackers';
 
 const CONDITION_SUGGESTIONS = [
   'Rheumatoid Arthritis', 'Lupus', 'Psoriatic Arthritis', 'Crohn’s / IBD',
@@ -168,13 +169,17 @@ export function Onboarding() {
                       {[...DEFAULT_FACTORS.map((f) => f.label), ...customFactors].map((label) => (
                         <label
                           key={label}
-                          className="flex items-center gap-2 p-2 rounded-lg border cursor-pointer hover:bg-gray-50"
+                          className="flex items-start gap-2 p-2 rounded-lg border cursor-pointer hover:bg-gray-50"
                         >
                           <Checkbox
                             checked={factors.includes(label)}
                             onCheckedChange={() => toggleFactor(label)}
+                            className="mt-0.5"
                           />
-                          <span className="text-sm">{label}</span>
+                          <span className="leading-tight">
+                            <span className="text-sm block">{label}</span>
+                            <span className="text-[10px] text-muted-foreground">{markerFor(label)}</span>
+                          </span>
                         </label>
                       ))}
                     </div>

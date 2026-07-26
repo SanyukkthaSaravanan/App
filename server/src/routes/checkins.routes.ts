@@ -25,6 +25,9 @@ const schema = z.object({
   foodTriggers: z.array(z.string()).optional(),
   mobility: z.enum(['hard', 'some-difficulty', 'okay']).optional(),
   notes: z.string().optional(),
+  // Dynamic tracked-factor values { label: number } + which part of day.
+  factors: z.record(z.any()).optional(),
+  partOfDay: z.enum(['morning', 'afternoon', 'evening']).optional(),
 });
 
 checkInsRouter.get('/', async (req, res, next) => {
@@ -50,12 +53,12 @@ checkInsRouter.get('/', async (req, res, next) => {
 checkInsRouter.post('/', async (req, res, next) => {
   try {
     const body = schema.parse(req.body);
-    const date = body.date ? new Date(body.date) : new Date();
-    // Normalize to start of day
-    date.setHours(0, 0, 0, 0);
-    const dateIso = date.toISOString();
+    // Full timestamp (not start-of-day) so multiple check-ins per day are
+    // distinct rows without dropping the (userId, date) unique index.
+    const dateIso = (body.date ? new Date(body.date) : new Date()).toISOString();
 
-    const payload = {
+    const base: Record<string, unknown> = {
+      id: crypto.randomUUID(),
       userId: req.userId!,
       date: dateIso,
       energy: body.energy ?? null,
@@ -77,37 +80,21 @@ checkInsRouter.post('/', async (req, res, next) => {
       notes: body.notes ?? null,
     };
 
-    // Try to find existing check-in for this user+date
-    const existing = sbMaybe(
-      await supabase
-        .from('DailyCheckIn')
-        .select('id')
-        .eq('userId', req.userId!)
-        .eq('date', dateIso)
-        .single()
-    ) as { id: string } | null;
+    // factors / partOfDay may not be migrated yet — insert with, retry without.
+    let result = await supabase
+      .from('DailyCheckIn')
+      .insert({ ...base, factors: body.factors ?? null, partOfDay: body.partOfDay ?? null })
+      .select()
+      .single();
 
-    let result;
-    if (existing) {
-      result = sb(
-        await supabase
-          .from('DailyCheckIn')
-          .update(payload)
-          .eq('id', existing.id)
-          .select()
-          .single()
-      );
-    } else {
-      result = sb(
-        await supabase
-          .from('DailyCheckIn')
-          .insert({ id: crypto.randomUUID(), ...payload })
-          .select()
-          .single()
-      );
+    if (result.error) {
+      const msg = result.error.message ?? '';
+      if ((msg.includes('factors') || msg.includes('partOfDay')) && /column|schema cache/i.test(msg)) {
+        result = await supabase.from('DailyCheckIn').insert(base).select().single();
+      }
     }
 
-    res.status(201).json(result);
+    res.status(201).json(sb(result));
   } catch (e) {
     next(e);
   }
