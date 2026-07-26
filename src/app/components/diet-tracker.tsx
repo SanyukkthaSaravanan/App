@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { diet as dietApi, insights as insightsApi, type ParsedLog } from '../../lib/api';
+import { useAuth } from '../../context/auth-context';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -33,6 +34,7 @@ const foodCategories = [
 
 export function DietTracker() {
   const [entries, setEntries] = useState<FoodEntry[]>([]);
+  const { user, completeOnboarding } = useAuth();
 
   useEffect(() => {
     dietApi.list().then((list) => {
@@ -162,10 +164,25 @@ export function DietTracker() {
 
   const clearVoiceExtras = () => setLastParsed(null);
 
-  const addTrigger = () => {
-    if (!newTrigger) return;
+  // Keep confirmed triggers in sync with the saved profile (cross-device).
+  useEffect(() => {
+    if (user?.knownTriggers) setConfirmedTriggers(user.knownTriggers);
+  }, [user?.knownTriggers]);
 
-    setConfirmedTriggers([...confirmedTriggers, newTrigger]);
+  // Persist the triggers list to the user's profile so it syncs everywhere.
+  const persistTriggers = (next: string[]) => {
+    setConfirmedTriggers(next);
+    completeOnboarding({
+      condition: user?.condition ?? undefined,
+      trackedFactors: user?.trackedFactors ?? undefined,
+      knownTriggers: next,
+      consent: true,
+    }).catch(() => {});
+  };
+
+  const addTrigger = () => {
+    if (!newTrigger || confirmedTriggers.includes(newTrigger)) return;
+    persistTriggers([...confirmedTriggers, newTrigger]);
     setNewTrigger('');
     setShowAddTrigger(false);
   };
@@ -444,7 +461,7 @@ export function DietTracker() {
                   {trigger}
                   <button
                     onClick={() =>
-                      setConfirmedTriggers(confirmedTriggers.filter((t) => t !== trigger))
+                      persistTriggers(confirmedTriggers.filter((t) => t !== trigger))
                     }
                     className="ml-2 hover:text-red-600"
                     aria-label={`Remove ${trigger}`}
