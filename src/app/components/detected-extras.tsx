@@ -20,8 +20,10 @@ interface DetectedExtrasProps {
  * mentioned outside the current section (e.g. a symptom + medication named in a
  * diet note). Each chip writes directly to its section's API.
  */
+type Status = 'idle' | 'saving' | 'done' | 'error';
+
 export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
-  const [logged, setLogged] = useState<Set<string>>(new Set());
+  const [status, setStatus] = useState<Record<string, Status>>({});
 
   if (!parsed) return null;
 
@@ -91,13 +93,16 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
   if (items.length === 0) return null;
 
   const handle = async (key: string, run: () => Promise<unknown>) => {
+    setStatus((prev) => ({ ...prev, [key]: 'saving' }));
     try {
       await run();
-      setLogged((prev) => new Set(prev).add(key));
+      setStatus((prev) => ({ ...prev, [key]: 'done' }));
     } catch {
-      /* leave un-logged so the user can retry */
+      setStatus((prev) => ({ ...prev, [key]: 'error' }));
     }
   };
+
+  const anyError = items.some((it) => status[it.key] === 'error');
 
   return (
     <div className="p-3 rounded-lg border border-dashed border-[#B48CBF] bg-[#F5F0F6]">
@@ -106,23 +111,41 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
       </p>
       <div className="flex flex-wrap gap-2">
         {items.map((it) => {
-          const done = logged.has(it.key);
+          const st = status[it.key] ?? 'idle';
+          const done = st === 'done';
           return (
             <Button
               key={it.key}
               size="sm"
               variant="outline"
-              disabled={done}
+              disabled={st === 'saving' || done}
               onClick={() => handle(it.key, it.run)}
-              className={done ? 'border-green-400 text-green-700' : ''}
+              className={
+                done
+                  ? 'border-green-400 text-green-700'
+                  : st === 'error'
+                  ? 'border-red-400 text-red-700'
+                  : ''
+              }
             >
-              {done ? <Check className="h-3 w-3 mr-1" /> : it.icon}
+              {st === 'saving' ? (
+                <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1" />
+              ) : done ? (
+                <Check className="h-3 w-3 mr-1" />
+              ) : (
+                it.icon
+              )}
               {it.label}
-              {done ? ' · logged' : ''}
+              {done ? ' · logged' : st === 'error' ? ' · retry' : ''}
             </Button>
           );
         })}
       </div>
+      {anyError && (
+        <p className="text-xs text-red-600 mt-2">
+          Couldn't log that — tap the item again to retry.
+        </p>
+      )}
     </div>
   );
 }

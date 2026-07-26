@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { symptoms as symptomsApi, nlp } from '../../lib/api';
+import { symptoms as symptomsApi, nlp, type ParsedLog } from '../../lib/api';
 import { useWhisper } from '../../hooks/useWhisper';
+import { DetectedExtras } from './detected-extras';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -108,6 +109,8 @@ export function BodyMapNew() {
   });
   const isRecording = whisper.state === 'recording';
   const isProcessing = whisper.state === 'processing';
+  // Cross-category items (meds/food) detected in a symptom voice note.
+  const [crossParsed, setCrossParsed] = useState<ParsedLog | null>(null);
 
   // Front view hotspots
   const frontHotspots: Hotspot[] = [
@@ -234,14 +237,15 @@ export function BodyMapNew() {
     setGeneralName('');
     setGeneralSeverity(5);
     setGeneralNotes('');
-    setIsRecording(false);
     setNlpParsed(false);
+    setCrossParsed(null);
     setGeneralOpen(true);
   };
 
   const closeGeneralDialog = () => {
+    if (whisper.state !== 'idle') whisper.stop();
     setGeneralOpen(false);
-    setIsRecording(false);
+    setCrossParsed(null);
   };
 
   const saveGeneralSymptom = async () => {
@@ -270,23 +274,26 @@ export function BodyMapNew() {
     closeGeneralDialog();
   };
 
-  // Apply NLP result to auto-fill general symptom form fields
+  // Parse the transcript into structured data: fill the symptom fields from the
+  // primary symptom, and surface any medications/food for one-tap cross-logging.
   const applyNlpResult = async (transcript: string) => {
     try {
-      const result = await nlp.analyze(transcript);
-      if (result.symptoms.length > 0) {
-        setGeneralName(result.symptoms[0]);
+      const parsed = await nlp.parseLog(transcript);
+      const primary = parsed.symptoms[0];
+      if (primary) {
+        setGeneralName(primary.name);
+        if (primary.severity != null) setGeneralSeverity(primary.severity);
+        const extra = parsed.symptoms.slice(1).map((s) => s.name);
+        if (extra.length) {
+          setGeneralNotes((prev) =>
+            (prev ? prev + ' ' : '') + `Also mentioned: ${extra.join(', ')}`
+          );
+        }
       }
-      if (result.severity !== null) {
-        setGeneralSeverity(result.severity);
-      }
-      if (result.bodyParts.length > 0) {
-        const bodyNote = `Body area: ${result.bodyParts.join(', ')}`;
-        setGeneralNotes((prev) => (prev ? prev + ' ' : '') + bodyNote);
-      }
+      setCrossParsed(parsed);
       setNlpParsed(true);
     } catch {
-      // NLP unavailable — notes already set from transcript, no-op
+      // Parser unavailable — transcript is already in the notes field, no-op
     }
   };
 
@@ -697,6 +704,9 @@ export function BodyMapNew() {
                 </p>
               )}
             </div>
+
+            {/* Medications / food mentioned in the note — log to their sections */}
+            <DetectedExtras parsed={crossParsed} show={['medications', 'diet']} />
           </div>
 
           <DialogFooter>

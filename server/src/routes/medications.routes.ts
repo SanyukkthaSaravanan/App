@@ -81,32 +81,44 @@ medicationsRouter.post('/', async (req, res, next) => {
       ocrDocumentId = ocrDoc.id;
     }
 
-    const created = sb(
-      await supabase
-        .from('Medication')
-        .insert({
-          id: crypto.randomUUID(),
-          userId: req.userId!,
-          name: body.name,
-          dosage: body.dosage,
-          frequency: body.frequency,
-          timesPerDay: body.timesPerDay,
-          scheduleTimes: body.scheduleTimes,
-          startDate: new Date(body.startDate).toISOString(),
-          endDate: body.endDate ? new Date(body.endDate).toISOString() : null,
-          color: body.color ?? '#7293BB',
-          notes: body.notes ?? null,
-          active: true,
-          genericName: body.genericName ?? null,
-          drugClass: body.drugClass ?? null,
-          category: body.category ?? null,
-          prescribedBy: body.prescribedBy ?? null,
-          source: ocrDocumentId ? 'ocr' : 'manual',
-          ocrDocumentId,
-        })
-        .select()
-        .single()
-    );
+    const baseRow: Record<string, unknown> = {
+      id: crypto.randomUUID(),
+      userId: req.userId!,
+      name: body.name,
+      dosage: body.dosage,
+      frequency: body.frequency,
+      timesPerDay: body.timesPerDay,
+      scheduleTimes: body.scheduleTimes,
+      startDate: new Date(body.startDate).toISOString(),
+      endDate: body.endDate ? new Date(body.endDate).toISOString() : null,
+      color: body.color ?? '#7293BB',
+      notes: body.notes ?? null,
+      active: true,
+      genericName: body.genericName ?? null,
+      drugClass: body.drugClass ?? null,
+      category: body.category ?? null,
+      prescribedBy: body.prescribedBy ?? null,
+    };
+
+    // Provenance columns (source, ocrDocumentId) may not be migrated yet.
+    // Try with them; if the DB reports the column is missing, retry without.
+    let result = await supabase
+      .from('Medication')
+      .insert({ ...baseRow, source: ocrDocumentId ? 'ocr' : 'manual', ocrDocumentId })
+      .select()
+      .single();
+
+    if (result.error) {
+      const msg = result.error.message ?? '';
+      const missingProvenanceColumn =
+        (msg.includes('ocrDocumentId') || msg.includes('source')) &&
+        /column|schema cache/i.test(msg);
+      if (missingProvenanceColumn) {
+        result = await supabase.from('Medication').insert(baseRow).select().single();
+      }
+    }
+
+    const created = sb(result);
     res.status(201).json(created);
   } catch (e) {
     next(e);
