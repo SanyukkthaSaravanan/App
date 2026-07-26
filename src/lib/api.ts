@@ -53,11 +53,22 @@ export interface AuthUser {
   username: string;
   firstName?: string;
   lastName?: string;
+  onboardingCompleted?: boolean;
+  condition?: string | null;
+  trackedFactors?: string[] | null;
+  knownTriggers?: string[] | null;
 }
 
 export interface AuthResponse {
   token: string;
   user: AuthUser;
+}
+
+export interface OnboardingInput {
+  condition?: string;
+  trackedFactors?: string[];
+  knownTriggers?: string[];
+  consent: boolean;
 }
 
 export const auth = {
@@ -66,6 +77,8 @@ export const auth = {
   register: (email: string, username: string, password: string, firstName?: string, lastName?: string) =>
     post<AuthResponse>('/api/auth/register', { email, username, password, firstName, lastName }),
   me: () => get<{ user: AuthUser }>('/api/auth/me'),
+  onboarding: (data: OnboardingInput) =>
+    post<{ ok: boolean; persisted: boolean }>('/api/auth/onboarding', data),
 };
 
 // ── Symptoms ───────────────────────────────────────────────────────────────────
@@ -144,6 +157,13 @@ export interface CreateMedicationInput {
   ocr?: MedicationOcrProvenance;
 }
 
+export interface MedsToday {
+  date: string;
+  taken: number;
+  total: number;
+  meds: Array<{ id: string; name: string; scheduleTimes: string[]; takenFlags: boolean[] }>;
+}
+
 export const medications = {
   list: () => get<Medication[]>('/api/medications'),
   create: (data: CreateMedicationInput) =>
@@ -153,6 +173,10 @@ export const medications = {
     post<{ ok: boolean }>(`/api/medications/${medId}/doses/${doseId}/taken`, {}),
   markSkipped: (medId: string, doseId: string) =>
     post<{ ok: boolean }>(`/api/medications/${medId}/doses/${doseId}/skip`, {}),
+  // Daily dose tracking (persisted per user/day/time)
+  today: (date: string) => get<MedsToday>(`/api/medications/today?date=${date}`),
+  toggleDose: (medId: string, timeIndex: number, taken: boolean, date: string) =>
+    post<{ ok: boolean }>(`/api/medications/${medId}/dose`, { timeIndex, taken, date }),
 };
 
 // ── Check-ins ──────────────────────────────────────────────────────────────────

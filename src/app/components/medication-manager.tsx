@@ -35,8 +35,20 @@ interface Medication {
 export function MedicationManager() {
   const [medications, setMedications] = useState<Medication[]>([]);
 
+  // Today's local date (YYYY-MM-DD) for persisting/reading dose status.
+  const todayKey = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+
   useEffect(() => {
-    medsApi.list().then((list) => {
+    Promise.all([
+      medsApi.list(),
+      medsApi.today(todayKey).catch(() => ({ meds: [] as any[], taken: 0, total: 0, date: todayKey })),
+    ]).then(([list, today]) => {
+      const takenById = new Map<string, boolean[]>(
+        (today.meds ?? []).map((m: any) => [m.id, m.takenFlags as boolean[]])
+      );
       setMedications(
         list.map((m) => ({
           id: m.id,
@@ -44,7 +56,8 @@ export function MedicationManager() {
           dosage: m.dosage,
           frequency: m.frequency,
           time: m.scheduleTimes,
-          taken: m.scheduleTimes.map(() => false),
+          // Prefer today's persisted taken flags; fall back to all-false.
+          taken: takenById.get(m.id) ?? m.scheduleTimes.map(() => false),
           notes: m.notes ?? '',
           genericName: m.genericName,
           category: m.category,
@@ -126,16 +139,20 @@ export function MedicationManager() {
   };
 
   const toggleTaken = (medId: string, timeIndex: number) => {
+    let nextValue = false;
     setMedications(
       medications.map((med) => {
         if (med.id === medId) {
           const newTaken = [...med.taken];
           newTaken[timeIndex] = !newTaken[timeIndex];
+          nextValue = newTaken[timeIndex];
           return { ...med, taken: newTaken };
         }
         return med;
       })
     );
+    // Persist today's dose status so the dashboard + reloads reflect it.
+    medsApi.toggleDose(medId, timeIndex, nextValue, todayKey).catch(() => {});
   };
 
   const getCompletionStatus = (med: Medication) => {

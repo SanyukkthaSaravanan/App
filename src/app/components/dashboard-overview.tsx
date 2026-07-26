@@ -148,7 +148,7 @@ interface WeekSeries {
 
 export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOverviewProps) {
   const [hasCheckedIn, setHasCheckedIn] = useState(false);
-  const [medCount, setMedCount] = useState<number | null>(null);
+  const [medsToday, setMedsToday] = useState<{ taken: number; total: number } | null>(null);
   const [weekSeries, setWeekSeries] = useState<WeekSeries>({
     energy: [], pain: [], sleep: [], stress: [],
   });
@@ -159,7 +159,10 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     }).catch(() => {});
 
     // Medication count for the dashboard card (Task 4)
-    medsApi.list().then((meds) => setMedCount(meds.length)).catch(() => setMedCount(0));
+    medsApi
+      .today(dateKey(new Date()))
+      .then((r) => setMedsToday({ taken: r.taken, total: r.total }))
+      .catch(() => setMedsToday({ taken: 0, total: 0 }));
 
     // Last-7-days series from real logged data (Task 8)
     const now = new Date();
@@ -204,8 +207,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
       setWeekSeries({ energy, pain, sleep, stress });
     });
   }, []);
-  const [isFlareDay, setIsFlareDay] = useState(true);
-  const [flareStartDate] = useState(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)); // 2 days ago
   const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [checkInStep, setCheckInStep] = useState(1);
   const [showCheckInData, setShowCheckInData] = useState(false);
@@ -226,22 +227,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     month: 'long',
     day: 'numeric',
   });
-
-  const daysSinceFlare = Math.floor(
-    (today.getTime() - flareStartDate.getTime()) / (1000 * 60 * 60 * 24)
-  );
-
-  // Today's Status (auto-generated)
-  const todayStatus = isFlareDay
-    ? {
-        energy: 'Low',
-        pain: 'Moderate',
-        flare: true,
-      }
-    : {
-        message: 'Feeling steady today',
-        flare: false,
-      };
 
   const handleCheckInComplete = () => {
     setHasCheckedIn(true);
@@ -459,11 +444,7 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
             // Default check-in view
             <div className="text-center space-y-4">
               <h3 className="text-xl">
-                {hasCheckedIn
-                  ? "You've checked in today ✓"
-                  : isFlareDay
-                  ? 'Quick check-in'
-                  : 'Check in'}
+                {hasCheckedIn ? "You've checked in today ✓" : 'Check in'}
               </h3>
               <p className="text-sm text-muted-foreground">
                 {hasCheckedIn ? 'Come back tomorrow' : 'Takes seconds'}
@@ -483,7 +464,7 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
                   style={{ backgroundColor: '#7293BB' }}
                   onClick={() => setShowCheckInModal(true)}
                 >
-                  {isFlareDay ? 'Quick check-in' : 'Check in'}
+                  Check in
                 </Button>
               )}
             </div>
@@ -502,19 +483,8 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
             </DialogDescription>
           </VisuallyHidden>
 
-          {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-            <div className="p-6 pb-0">
-              <TabsList className="w-full grid grid-cols-2">
-                <TabsTrigger value="checkin">Daily Check-in</TabsTrigger>
-                <TabsTrigger value="settings">
-                  <Settings className="h-4 w-4 mr-2" />
-                  Customise
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            {/* Daily Check-in Tab */}
+          {/* Daily Check-in (tracker customisation now lives in Settings) */}
+          <Tabs value="checkin" className="flex-1 flex flex-col">
             <TabsContent value="checkin" className="flex-1 overflow-y-auto p-8 pt-4">
               <div className="space-y-6">
                 {/* Core Check-in Steps */}
@@ -741,92 +711,9 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
                 </div>
               </div>
             </TabsContent>
-
-            {/* Settings Tab */}
-            <TabsContent value="settings" className="flex-1 overflow-y-auto p-8 pt-4">
-              <div className="space-y-6">
-                <div className="text-center mb-6">
-                  <h2 className="text-2xl font-semibold mb-2">Customize Your Tracking</h2>
-                  <p className="text-sm text-muted-foreground">
-                    Choose what you want to track in your daily check-in
-                  </p>
-                </div>
-
-                {/* Tracking Factors List */}
-                <div className="space-y-4">
-                  {trackingFactors.map((factor) => (
-                    <div
-                      key={factor.id}
-                      className="flex items-center justify-between p-4 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">{factor.icon}</span>
-                        <div>
-                          <p className="font-medium">{factor.name}</p>
-                          <p className="text-xs text-muted-foreground capitalize">
-                            Input: {factor.inputType === 'checkbox' ? 'Yes/No' : factor.inputType}
-                            {factor.inputType === 'slider' && ` (${factor.min}-${factor.max})`}
-                          </p>
-                        </div>
-                      </div>
-                      <Switch
-                        checked={factor.enabled}
-                        onCheckedChange={(checked) => {
-                          setTrackingFactors(trackingFactors.map(f => 
-                            f.id === factor.id ? { ...f, enabled: checked } : f
-                          ));
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <div className="pt-4 border-t">
-                  <p className="text-sm text-muted-foreground text-center">
-                    Enable the factors you want to include in your daily check-in. Changes will apply to your next check-in.
-                  </p>
-                </div>
-              </div>
-            </TabsContent>
           </Tabs>
         </DialogContent>
       </Dialog>
-
-      {/* Flare Awareness Section (Conditional) */}
-      {isFlareDay && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.1 }}>
-        <Card className="border-2" style={{ borderColor: '#E89BA1', backgroundColor: '#FEF2F3' }}>
-          <CardContent className="pt-6">
-            <div className="space-y-4 text-center">
-              <div className="flex flex-col items-center gap-3">
-                <div
-                  className="p-2 rounded-lg"
-                  style={{ backgroundColor: '#E89BA1' }}
-                >
-                  <Flame className="h-5 w-5 text-white" />
-                </div>
-                <div>
-                  <h4 className="mb-1">You're currently in a flare</h4>
-                  <p className="text-sm text-muted-foreground">
-                    Flare started {daysSinceFlare} {daysSinceFlare === 1 ? 'day' : 'days'} ago
-                  </p>
-                </div>
-              </div>
-              <div className="flex justify-center">
-                <Button
-                  variant="outline"
-                  className="text-white border-0"
-                  style={{ backgroundColor: '#E89BA1' }}
-                  onClick={onEnableFlareMode}
-                >
-                  Enable flare day mode
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        </motion.div>
-      )}
 
       {/* Core Symptom Snapshot - Last 7 Days (real logged data) */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
@@ -940,23 +827,33 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <CheckCircle2
+                  className={`h-5 w-5 ${
+                    medsToday && medsToday.total > 0 && medsToday.taken === medsToday.total
+                      ? 'text-green-600'
+                      : 'text-gray-400'
+                  }`}
+                />
                 <span>
-                  {medCount === null
+                  {medsToday === null
                     ? 'Loading…'
-                    : medCount === 0
+                    : medsToday.total === 0
                     ? 'No medications yet'
-                    : `${medCount} medication${medCount === 1 ? '' : 's'} tracked`}
+                    : `${medsToday.taken} of ${medsToday.total} doses taken today`}
                 </span>
               </div>
               <p className="text-sm text-muted-foreground pl-7">
-                {medCount === 0
+                {medsToday === null
+                  ? ''
+                  : medsToday.total === 0
                   ? 'Add your medications to start tracking doses'
+                  : medsToday.taken === medsToday.total
+                  ? 'All done for today ✓'
                   : 'Mark doses as taken on the Medications page'}
               </p>
             </div>
             <Button variant="outline" onClick={() => onNavigate('medications')}>
-              {medCount === 0 ? 'Add meds' : 'Log meds'}
+              {medsToday && medsToday.total === 0 ? 'Add meds' : 'Log meds'}
             </Button>
           </div>
         </CardContent>

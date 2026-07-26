@@ -3,9 +3,10 @@ import { motion } from 'motion/react';
 import { AuthProvider, useAuth } from '../context/auth-context';
 import { Auth } from './components/auth';
 import { Dashboard } from './components/dashboard';
+import { Onboarding } from './components/onboarding';
 
 function AppInner() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, needsOnboarding } = useAuth();
 
   if (isLoading) {
     return (
@@ -32,6 +33,9 @@ function AppInner() {
   }
 
   if (!user) return <Auth />;
+
+  // First-time login → onboarding questionnaire (gated by PDPA consent)
+  if (needsOnboarding) return <Onboarding />;
 
   const displayName = user.firstName
     ? `${user.firstName}${user.lastName ? ' ' + user.lastName : ''}`

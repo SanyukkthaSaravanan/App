@@ -112,17 +112,62 @@ authRouter.post('/login', async (req, res, next) => {
 
 authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = sbMaybe(
-      await supabase
-        .from('User')
-        .select(
-          'id, email, username, firstName, lastName, dateOfBirth, timezone, avatarUrl, createdAt'
-        )
-        .eq('id', req.userId!)
-        .single()
-    );
+    const baseCols =
+      'id, email, username, firstName, lastName, dateOfBirth, timezone, avatarUrl, createdAt';
+    const fullCols =
+      baseCols + ', onboardingCompleted, condition, trackedFactors, knownTriggers';
+
+    // Onboarding columns may not be migrated yet — fall back to base columns.
+    let result = await supabase.from('User').select(fullCols).eq('id', req.userId!).single();
+    if (result.error && /column|schema cache/i.test(result.error.message ?? '')) {
+      result = await supabase.from('User').select(baseCols).eq('id', req.userId!).single();
+    }
+    const user = sbMaybe(result) as any;
     if (!user) throw new HttpError(404, 'User not found');
-    res.json({ user });
+    res.json({
+      user: { ...user, onboardingCompleted: user.onboardingCompleted ?? false },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const onboardingSchema = z.object({
+  condition: z.string().optional(),
+  trackedFactors: z.array(z.string()).optional(),
+  knownTriggers: z.array(z.string()).optional(),
+  consent: z.boolean(),
+});
+
+/**
+ * POST /api/auth/onboarding — saves the first-login questionnaire.
+ * Requires consent. Resilient to the onboarding columns not being migrated yet.
+ */
+authRouter.post('/onboarding', requireAuth, async (req, res, next) => {
+  try {
+    const body = onboardingSchema.parse(req.body);
+    if (!body.consent) throw new HttpError(400, 'You must accept the privacy policy to continue.');
+
+    const result = await supabase
+      .from('User')
+      .update({
+        onboardingCompleted: true,
+        condition: body.condition ?? null,
+        trackedFactors: body.trackedFactors ?? null,
+        knownTriggers: body.knownTriggers ?? null,
+        consentAcceptedAt: new Date().toISOString(),
+      })
+      .eq('id', req.userId!)
+      .select('id')
+      .single();
+
+    if (result.error && /column|schema cache/i.test(result.error.message ?? '')) {
+      // Columns not migrated yet — accept so the user isn't blocked; the
+      // frontend keeps a local backstop so onboarding doesn't repeat.
+      return res.json({ ok: true, persisted: false });
+    }
+    sb(result);
+    res.json({ ok: true, persisted: true });
   } catch (e) {
     next(e);
   }

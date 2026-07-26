@@ -8,6 +8,7 @@ import { DietTracker } from './diet-tracker';
 import { HealthInsights } from './health-insights';
 import { HealthCalendar } from './health-calendar';
 import { FlareMode } from './flare-mode';
+import { Settings as SettingsPage } from './settings';
 import {
   LayoutDashboard,
   Activity,
@@ -17,6 +18,7 @@ import {
   Calendar,
   Menu,
   LogOut,
+  Settings,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle, SheetDescription } from './ui/sheet';
@@ -39,6 +41,7 @@ export function Dashboard({ userName }: DashboardProps) {
     { id: 'diet', name: 'Diet', icon: Apple },
     { id: 'calendar', name: 'Calendar', icon: Calendar },
     { id: 'insights', name: 'Insights', icon: TrendingUp },
+    { id: 'settings', name: 'Settings', icon: Settings },
   ];
 
   const NavigationContent = () => (
@@ -165,6 +168,7 @@ export function Dashboard({ userName }: DashboardProps) {
                 {activeTab === 'diet' && <DietTracker />}
                 {activeTab === 'calendar' && <HealthCalendar />}
                 {activeTab === 'insights' && <HealthInsights />}
+                {activeTab === 'settings' && <SettingsPage />}
               </motion.div>
             )}
             </AnimatePresence>

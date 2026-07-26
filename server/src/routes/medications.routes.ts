@@ -52,6 +52,105 @@ medicationsRouter.get('/', async (req, res, next) => {
   }
 });
 
+// Deterministic dose id so toggling a specific med/day/time is idempotent.
+const doseId = (medId: string, date: string, timeIndex: number) =>
+  `${medId}:${date}:${timeIndex}`;
+
+/**
+ * GET /api/medications/today?date=YYYY-MM-DD  (user's local date)
+ * Returns per-medication taken flags for today + an aggregate { taken, total }.
+ */
+medicationsRouter.get('/today', async (req, res, next) => {
+  try {
+    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const meds = sb(
+      await supabase
+        .from('Medication')
+        .select()
+        .eq('userId', req.userId!)
+        .eq('active', true)
+        .order('createdAt', { ascending: false })
+    ) as any[];
+
+    // Expected dose ids for every scheduled time today
+    const expected: string[] = [];
+    for (const m of meds) {
+      const times: string[] = Array.isArray(m.scheduleTimes) ? m.scheduleTimes : [];
+      const count = times.length || 1;
+      for (let i = 0; i < count; i++) expected.push(doseId(m.id, date, i));
+    }
+
+    const takenSet = new Set<string>();
+    if (expected.length) {
+      const doses = sb(
+        await supabase
+          .from('MedicationDose')
+          .select('id, takenAt')
+          .eq('userId', req.userId!)
+          .in('id', expected)
+      ) as any[];
+      for (const d of doses) if (d.takenAt) takenSet.add(d.id);
+    }
+
+    let taken = 0;
+    let total = 0;
+    const detail = meds.map((m) => {
+      const times: string[] = Array.isArray(m.scheduleTimes) ? m.scheduleTimes : [];
+      const count = times.length || 1;
+      const takenFlags: boolean[] = [];
+      for (let i = 0; i < count; i++) {
+        const t = takenSet.has(doseId(m.id, date, i));
+        takenFlags.push(t);
+        total += 1;
+        if (t) taken += 1;
+      }
+      return { id: m.id, name: m.name, scheduleTimes: times, takenFlags };
+    });
+
+    res.json({ date, taken, total, meds: detail });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const toggleDoseSchema = z.object({
+  timeIndex: z.number().int().min(0).max(23),
+  taken: z.boolean(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/**
+ * POST /api/medications/:id/dose
+ * Body: { timeIndex, taken, date? }  — records/clears a taken dose for today.
+ */
+medicationsRouter.post('/:id/dose', async (req, res, next) => {
+  try {
+    const body = toggleDoseSchema.parse(req.body);
+    const date = body.date ?? new Date().toISOString().slice(0, 10);
+    const id = doseId(req.params.id, date, body.timeIndex);
+    sb(
+      await supabase
+        .from('MedicationDose')
+        .upsert(
+          {
+            id,
+            userId: req.userId!,
+            medicationId: req.params.id,
+            scheduledAt: new Date(`${date}T00:00:00.000Z`).toISOString(),
+            takenAt: body.taken ? new Date().toISOString() : null,
+            skipped: false,
+          },
+          { onConflict: 'id' }
+        )
+        .select()
+        .single()
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 medicationsRouter.post('/', async (req, res, next) => {
   try {
     const body = medSchema.parse(req.body);

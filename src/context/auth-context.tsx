@@ -1,13 +1,19 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { auth as authApi, token as tokenStore, type AuthUser } from '../lib/api';
+import { auth as authApi, token as tokenStore, type AuthUser, type OnboardingInput } from '../lib/api';
 
 interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
+  needsOnboarding: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, username: string, password: string, firstName?: string, lastName?: string) => Promise<void>;
+  completeOnboarding: (data: OnboardingInput) => Promise<void>;
   logout: () => void;
 }
+
+// Local backstop so onboarding never loops even if the DB columns aren't
+// migrated yet (server flag is authoritative once available).
+const onboardedKey = (id: string) => `flaire_onboarded_${id}`;
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -47,13 +53,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await authApi.register(email, username, password, firstName, lastName);
   }, []);
 
+  const completeOnboarding = useCallback(async (data: OnboardingInput) => {
+    await authApi.onboarding(data);
+    if (user) localStorage.setItem(onboardedKey(user.id), '1');
+    setUser((prev) =>
+      prev
+        ? {
+            ...prev,
+            onboardingCompleted: true,
+            condition: data.condition ?? prev.condition,
+            trackedFactors: data.trackedFactors ?? prev.trackedFactors,
+            knownTriggers: data.knownTriggers ?? prev.knownTriggers,
+          }
+        : prev
+    );
+  }, [user]);
+
   const logout = useCallback(() => {
     tokenStore.clear();
     setUser(null);
   }, []);
 
+  const needsOnboarding =
+    !!user &&
+    !user.onboardingCompleted &&
+    localStorage.getItem(onboardedKey(user.id)) !== '1';
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ user, isLoading, needsOnboarding, login, register, completeOnboarding, logout }}
+    >
       {children}
     </AuthContext.Provider>
   );
