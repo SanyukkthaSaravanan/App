@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { insights as insightsApi, type Insight } from '../../lib/api';
+import { insights as insightsApi, type HealthAnalysis } from '../../lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -160,15 +160,23 @@ export function HealthInsights() {
     to: undefined,
   });
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-  const [apiInsights, setApiInsights] = useState<Insight[]>([]);
+  const [analysis, setAnalysis] = useState<HealthAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(true);
+
+  const runAnalysis = () => {
+    setAnalyzing(true);
+    insightsApi
+      .analyze()
+      .then(setAnalysis)
+      .catch(() => setAnalysis(null))
+      .finally(() => setAnalyzing(false));
+  };
 
   useEffect(() => {
-    insightsApi.list().then(setApiInsights).catch(console.error);
+    runAnalysis();
   }, []);
 
-  const handleRefreshInsights = () => {
-    insightsApi.refresh().then(setApiInsights).catch(console.error);
-  };
+  const handleRefreshInsights = () => runAnalysis();
 
   const timePeriodLabels: Record<TimePeriod, string> = {
     days: 'Last 7 Days',
@@ -196,32 +204,15 @@ export function HealthInsights() {
     setTimePeriod('days');
   };
 
-  const insights = [
-    {
-      type: 'positive',
-      title: 'Symptom Improvement',
-      description: 'Your average pain level decreased by 30% this week',
-      icon: TrendingDown,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50',
-    },
-    {
-      type: 'info',
-      title: 'Pattern Detected',
-      description: 'Coffee consumption correlates with increased pain levels',
-      icon: Lightbulb,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
-    },
-    {
-      type: 'positive',
-      title: 'Medication Adherence',
-      description: 'Great job! 95% adherence this week',
-      icon: TrendingUp,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50',
-    },
-  ];
+  const trends = analysis?.trends ?? [];
+  const recommendations = analysis?.recommendations ?? [];
+
+  const trendStyle = (severity: 'positive' | 'warning' | 'info') =>
+    severity === 'positive'
+      ? { bg: 'bg-green-50', icon: TrendingUp, color: '#A5D3CF' }
+      : severity === 'warning'
+      ? { bg: 'bg-amber-50', icon: TrendingDown, color: '#F59E0B' }
+      : { bg: 'bg-blue-50', icon: Lightbulb, color: '#7293BB' };
 
   return (
     <motion.div
@@ -349,79 +340,43 @@ export function HealthInsights() {
         </CardContent>
       </Card>
 
-      {/* API Insights Cards */}
-      {apiInsights.length > 0 && (
+      {/* AI-generated insight cards (from the user's real logged data) */}
+      {analyzing && !analysis ? (
+        <Card>
+          <CardContent className="py-8 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+            <span className="w-4 h-4 border-2 border-[#7293BB] border-t-transparent rounded-full animate-spin" />
+            Analysing your logged data…
+          </CardContent>
+        </Card>
+      ) : analysis && !analysis.hasData ? (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            Not enough data yet to spot patterns. Log symptoms, meals, and daily check-ins for a few days and your personalised insights will appear here.
+          </CardContent>
+        </Card>
+      ) : trends.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {apiInsights.map((insight, idx) => (
-            <Card
-              key={insight.id}
-              className={`border-0 ${
-                insight.severity === 'positive'
-                  ? 'bg-green-50'
-                  : insight.severity === 'warning'
-                  ? 'bg-amber-50'
-                  : 'bg-blue-50'
-              } ${idx === 0 ? 'md:col-span-2' : ''}`}
-            >
-              <CardContent className="pt-6">
-                <div className="flex gap-3 items-start">
-                  <Badge
-                    style={{
-                      backgroundColor:
-                        insight.severity === 'positive'
-                          ? '#A5D3CF'
-                          : insight.severity === 'warning'
-                          ? '#F59E0B'
-                          : '#7293BB',
-                      color: 'white',
-                    }}
-                  >
-                    {insight.severity}
-                  </Badge>
-                  <div className="flex-1">
-                    <h4 className="mb-1">{insight.title}</h4>
-                    <p className="text-sm text-muted-foreground">{insight.description}</p>
+          {trends.map((trend, idx) => {
+            const s = trendStyle(trend.severity);
+            const Icon = s.icon;
+            return (
+              <Card key={idx} className={`${s.bg} border-0 ${idx === 0 ? 'md:col-span-2' : ''}`}>
+                <CardContent className="pt-6">
+                  <div className="flex gap-3">
+                    <div className="p-2 rounded-lg h-fit" style={{ backgroundColor: s.color }}>
+                      <Icon className="h-5 w-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="mb-1">{trend.title}</h4>
+                      <p className="text-sm text-muted-foreground">{trend.description}</p>
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
-      )}
-
-      {/* Insights Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {insights.map((insight, idx) => {
-          const Icon = insight.icon;
-          return (
-            <Card key={idx} className={`${insight.bgColor} border-0 ${idx === 0 ? 'md:col-span-2' : ''}`}>
-              <CardContent className="pt-6">
-                <div className="flex gap-3">
-                  <div
-                    className={`p-2 rounded-lg ${insight.color}`}
-                    style={{
-                      backgroundColor:
-                        insight.type === 'positive'
-                          ? '#A5D3CF'
-                          : insight.type === 'warning'
-                          ? '#F59E0B'
-                          : '#7293BB',
-                    }}
-                  >
-                    <Icon className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="mb-1">{insight.title}</h4>
-                    <p className="text-sm text-muted-foreground">
-                      {insight.description}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      ) : null}
 
       {/* Symptom Trends */}
       <Card>
@@ -520,46 +475,33 @@ export function HealthInsights() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {[
-            {
-              title: 'Reduce coffee intake',
-              reason: 'Strong correlation with increased pain levels',
-              priority: 'high',
-            },
-            {
-              title: 'Maintain current sleep schedule',
-              reason: 'Your symptoms improve with 7-8 hours of sleep',
-              priority: 'medium',
-            },
-            {
-              title: 'Consider stress management techniques',
-              reason: 'Stress is your most frequent trigger',
-              priority: 'high',
-            },
-            {
-              title: 'Keep up medication adherence',
-              reason: "You're doing great! Maintain this consistency",
-              priority: 'low',
-            },
-          ].map((rec, idx) => (
-            <div key={idx} className="p-3 border rounded-lg bg-card">
-              <div className="flex items-start justify-between mb-1">
-                <h4 className="flex-1">{rec.title}</h4>
-                <Badge
-                  variant={
-                    rec.priority === 'high'
-                      ? 'destructive'
-                      : rec.priority === 'medium'
-                      ? 'default'
-                      : 'secondary'
-                  }
-                >
-                  {rec.priority}
-                </Badge>
+          {recommendations.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">
+              {analyzing
+                ? 'Generating recommendations…'
+                : 'Keep logging and your personalised recommendations will appear here.'}
+            </p>
+          ) : (
+            recommendations.map((rec, idx) => (
+              <div key={idx} className="p-3 border rounded-lg bg-card">
+                <div className="flex items-start justify-between mb-1">
+                  <h4 className="flex-1">{rec.title}</h4>
+                  <Badge
+                    variant={
+                      rec.priority === 'high'
+                        ? 'destructive'
+                        : rec.priority === 'medium'
+                        ? 'default'
+                        : 'secondary'
+                    }
+                  >
+                    {rec.priority}
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">{rec.reason}</p>
               </div>
-              <p className="text-sm text-muted-foreground">{rec.reason}</p>
-            </div>
-          ))}
+            ))
+          )}
         </CardContent>
       </Card>
     </motion.div>

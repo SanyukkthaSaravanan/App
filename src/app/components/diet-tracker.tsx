@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { diet as dietApi, type ParsedLog } from '../../lib/api';
+import { diet as dietApi, insights as insightsApi, type ParsedLog } from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -48,6 +48,15 @@ export function DietTracker() {
         }))
       );
     }).catch(() => {});
+
+    // AI analysis of logged reactions → potential trigger foods
+    insightsApi.analyze().then((a) => {
+      if (a.triggerFoods.length) {
+        setFlaggedFoods((prev) =>
+          Array.from(new Set([...a.triggerFoods.map((f) => f.name), ...prev]))
+        );
+      }
+    }).catch(() => {});
   }, []);
   const [showAddForm, setShowAddForm] = useState(false);
   // Full parsed result from the last voice note — drives the cross-category
@@ -60,14 +69,10 @@ export function DietTracker() {
     reaction: 'neutral' as 'positive' | 'negative' | 'neutral',
     notes: '',
   });
-  const [flaggedFoods, setFlaggedFoods] = useState<string[]>([
-    'Coffee',
-    'Tomatoes',
-  ]);
-  const [confirmedTriggers, setConfirmedTriggers] = useState<string[]>([
-    'Dairy',
-    'Gluten',
-  ]);
+  // Potential trigger foods come from AI analysis of the user's logged
+  // reactions (plus any flagged live when a negative reaction is logged).
+  const [flaggedFoods, setFlaggedFoods] = useState<string[]>([]);
+  const [confirmedTriggers, setConfirmedTriggers] = useState<string[]>([]);
   const [showAddTrigger, setShowAddTrigger] = useState(false);
   const [newTrigger, setNewTrigger] = useState('');
 

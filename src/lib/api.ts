@@ -287,9 +287,20 @@ export interface Insight {
   createdAt: string;
 }
 
+// AI analysis of the user's logged data
+export interface HealthAnalysis {
+  trends: Array<{ title: string; description: string; severity: 'positive' | 'warning' | 'info' }>;
+  recommendations: Array<{ title: string; reason: string; priority: 'high' | 'medium' | 'low' }>;
+  triggerFoods: Array<{ name: string; reason: string }>;
+  summary: string;
+  usedAI: boolean;
+  hasData: boolean;
+}
+
 export const insights = {
   list: () => get<Insight[]>('/api/insights'),
   refresh: () => post<Insight[]>('/api/insights/refresh', {}),
+  analyze: () => get<HealthAnalysis>('/api/insights/analyze'),
 };
 
 // ── Calendar ───────────────────────────────────────────────────────────────────
