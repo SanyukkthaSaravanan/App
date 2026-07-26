@@ -36,9 +36,13 @@ export interface HealthAnalysis {
   summary: string;
   usedAI: boolean;
   hasData: boolean;
+  // True only when there's enough logged data to assign meaningful priorities.
+  enoughForPriority: boolean;
 }
 
 const DAYS = 60;
+// Below this many logged entries, priorities aren't reliable → hide them.
+const PRIORITY_MIN_ENTRIES = 8;
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -153,7 +157,7 @@ Rules:
 - Do NOT give medical diagnoses or prescribe treatment. Keep it supportive and practical.
 - If the data is sparse, say so plainly in fewer items rather than padding with guesses.`;
 
-async function analyzeWithOpenAI(agg: ReturnType<typeof aggregate>): Promise<Omit<HealthAnalysis, 'usedAI' | 'hasData'>> {
+async function analyzeWithOpenAI(agg: ReturnType<typeof aggregate>): Promise<Omit<HealthAnalysis, 'usedAI' | 'hasData' | 'enoughForPriority'>> {
   const resp = await getClient().chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.3,
@@ -169,7 +173,7 @@ async function analyzeWithOpenAI(agg: ReturnType<typeof aggregate>): Promise<Omi
 
 // ── Rule-based fallback ──────────────────────────────────────────────────────
 
-function analyzeRuleBased(agg: ReturnType<typeof aggregate>): Omit<HealthAnalysis, 'usedAI' | 'hasData'> {
+function analyzeRuleBased(agg: ReturnType<typeof aggregate>): Omit<HealthAnalysis, 'usedAI' | 'hasData' | 'enoughForPriority'> {
   const trends: Trend[] = [];
   const recommendations: Recommendation[] = [];
 
@@ -215,7 +219,7 @@ function analyzeRuleBased(agg: ReturnType<typeof aggregate>): Omit<HealthAnalysi
 
 // ── Normalisation ────────────────────────────────────────────────────────────
 
-function normalise(data: any): Omit<HealthAnalysis, 'usedAI' | 'hasData'> {
+function normalise(data: any): Omit<HealthAnalysis, 'usedAI' | 'hasData' | 'enoughForPriority'> {
   const sev = (v: any): Trend['severity'] => (['positive', 'warning', 'info'].includes(v) ? v : 'info');
   const pri = (v: any): Recommendation['priority'] => (['high', 'medium', 'low'].includes(v) ? v : 'medium');
   const str = (v: any) => (typeof v === 'string' ? v : '');
@@ -238,11 +242,13 @@ function normalise(data: any): Omit<HealthAnalysis, 'usedAI' | 'hasData'> {
 
 export async function analyzeUserHealth(userId: string): Promise<HealthAnalysis> {
   const data = await loadData(userId);
-  const hasData =
-    data.symptoms.length + data.diet.length + data.checkins.length + data.flares.length > 0;
+  const totalEntries =
+    data.symptoms.length + data.diet.length + data.checkins.length + data.flares.length;
+  const hasData = totalEntries > 0;
+  const enoughForPriority = totalEntries >= PRIORITY_MIN_ENTRIES;
 
   if (!hasData) {
-    return { trends: [], recommendations: [], triggerFoods: [], summary: '', usedAI: false, hasData: false };
+    return { trends: [], recommendations: [], triggerFoods: [], summary: '', usedAI: false, hasData: false, enoughForPriority: false };
   }
 
   const agg = aggregate(data);
@@ -250,10 +256,10 @@ export async function analyzeUserHealth(userId: string): Promise<HealthAnalysis>
   if (process.env.OPENAI_API_KEY) {
     try {
       const result = await analyzeWithOpenAI(agg);
-      return { ...result, usedAI: true, hasData: true };
+      return { ...result, usedAI: true, hasData: true, enoughForPriority };
     } catch {
       // fall through to rule-based
     }
   }
-  return { ...analyzeRuleBased(agg), usedAI: false, hasData: true };
+  return { ...analyzeRuleBased(agg), usedAI: false, hasData: true, enoughForPriority };
 }

@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { insights as insightsApi, type HealthAnalysis } from '../../lib/api';
+import {
+  insights as insightsApi,
+  checkins as checkinsApi,
+  symptoms as symptomsApi,
+  type HealthAnalysis,
+} from '../../lib/api';
+import { useAuth } from '../../context/auth-context';
+import { trackerFor } from '../../lib/trackers';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -153,6 +160,89 @@ const medicationAdherenceByPeriod = {
   ],
 };
 
+// Distinct colours cycled across the user's tracked factors.
+const FACTOR_COLORS = ['#B48CBF', '#7293BB', '#A5D3CF', '#E89BA1', '#F59E0B', '#8BA888', '#CDADD0', '#6C8EBF'];
+
+interface Bucket { label: string; start: number; end: number }
+
+function generateBuckets(period: TimePeriod): Bucket[] {
+  const now = new Date();
+  const out: Bucket[] = [];
+  if (period === 'weeks') {
+    for (let i = 3; i >= 0; i--) {
+      const end = new Date(now); end.setDate(now.getDate() - i * 7); end.setHours(23, 59, 59, 999);
+      const start = new Date(end); start.setDate(end.getDate() - 6); start.setHours(0, 0, 0, 0);
+      out.push({ label: `${start.getDate()}/${start.getMonth() + 1}`, start: +start, end: +end });
+    }
+  } else if (period === 'months') {
+    for (let i = 5; i >= 0; i--) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+      out.push({ label: start.toLocaleDateString('en-US', { month: 'short' }), start: +start, end: +end });
+    }
+  } else if (period === 'years') {
+    for (let i = 2; i >= 0; i--) {
+      const y = now.getFullYear() - i;
+      out.push({ label: String(y), start: +new Date(y, 0, 1), end: +new Date(y, 11, 31, 23, 59, 59, 999) });
+    }
+  } else {
+    // days (also the fallback for custom): last 7 days
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0, 0, 0, 0);
+      const end = new Date(d); end.setHours(23, 59, 59, 999);
+      out.push({ label: d.toLocaleDateString('en-US', { weekday: 'short' }), start: +d, end: +end });
+    }
+  }
+  return out;
+}
+
+// Value of a factor from a single check-in row (0–10), or null if absent.
+function checkinValue(factorId: string, c: any): number | null {
+  if (factorId === 'energy') return c.energy != null ? Math.min(10, c.energy * 2) : null;
+  if (factorId === 'stress') return c.stress ?? null;
+  if (factorId === 'mood') return c.mood != null ? Math.min(10, c.mood * 2) : null;
+  if (factorId === 'sleep') return c.sleep === 'good' ? 8 : c.sleep === 'okay' ? 5 : c.sleep === 'poor' ? 2 : null;
+  if (factorId === 'pain') return c.painIntensity === 'severe' ? 8 : c.painIntensity === 'moderate' ? 5 : c.painIntensity === 'mild' ? 3 : null;
+  const f = c.factors?.[factorId];
+  return typeof f === 'number' ? f : null;
+}
+
+function buildChartData(period: TimePeriod, checkins: any[], symptoms: any[], labels: string[]) {
+  const buckets = generateBuckets(period);
+  return buckets.map((b) => {
+    const cks = checkins.filter((c) => { const t = +new Date(c.date); return t >= b.start && t <= b.end; });
+    const syms = symptoms.filter((s) => { const t = +new Date(s.loggedAt); return t >= b.start && t <= b.end; });
+    const point: Record<string, number | string> = { date: b.label };
+
+    for (const label of labels) {
+      const t = trackerFor(label);
+      const l = label.toLowerCase();
+
+      // Symptom logs whose name matches this factor (e.g. "brain fog", "pain")
+      const matched = syms.filter((s) =>
+        (Array.isArray(s.symptoms) ? s.symptoms : []).some(
+          (n: any) => String(n).toLowerCase() === l || (l === 'pain' && String(n).toLowerCase().includes('pain'))
+        )
+      );
+      const symAvg = matched.length
+        ? matched.reduce((a, s) => a + (s.severity || 0), 0) / matched.length
+        : undefined;
+
+      // Check-in values for this factor across the bucket
+      const ckVals = cks.map((c) => checkinValue(t.id, c)).filter((v): v is number => v != null);
+      const ckAvg = ckVals.length ? ckVals.reduce((a, v) => a + v, 0) / ckVals.length : undefined;
+
+      // Prefer check-ins for mood/energy/stress/sleep; symptom severity for pain/custom.
+      const value = ['energy', 'stress', 'mood', 'sleep'].includes(t.id)
+        ? ckAvg ?? symAvg ?? 0
+        : symAvg ?? ckAvg ?? 0;
+
+      point[label] = Math.round(value * 10) / 10;
+    }
+    return point;
+  });
+}
+
 export function HealthInsights() {
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('days');
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
@@ -162,6 +252,14 @@ export function HealthInsights() {
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [analysis, setAnalysis] = useState<HealthAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(true);
+
+  const { user } = useAuth();
+  // The factors the user chose to track drive which trend lines appear.
+  const trackedLabels =
+    user?.trackedFactors && user.trackedFactors.length > 0
+      ? user.trackedFactors
+      : ['Pain', 'Fatigue / Energy'];
+  const [chartData, setChartData] = useState<Record<string, number | string>[]>([]);
 
   const runAnalysis = () => {
     setAnalyzing(true);
@@ -176,6 +274,22 @@ export function HealthInsights() {
     runAnalysis();
   }, []);
 
+  // Build the trend chart from real logged data for the selected period.
+  useEffect(() => {
+    const period = timePeriod === 'custom' ? 'days' : timePeriod;
+    const spanDays = period === 'weeks' ? 28 : period === 'months' ? 190 : period === 'years' ? 1100 : 7;
+    const from = new Date();
+    from.setDate(from.getDate() - spanDays);
+    from.setHours(0, 0, 0, 0);
+    Promise.all([
+      checkinsApi.list(from.toISOString(), new Date().toISOString()).catch(() => []),
+      symptomsApi.list().catch(() => []),
+    ]).then(([cks, syms]) => {
+      setChartData(buildChartData(period, cks, syms, trackedLabels));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timePeriod, user?.trackedFactors]);
+
   const handleRefreshInsights = () => runAnalysis();
 
   const timePeriodLabels: Record<TimePeriod, string> = {
@@ -188,7 +302,9 @@ export function HealthInsights() {
       : 'Custom Date Range',
   };
 
-  const symptomData = symptomDataByPeriod[timePeriod];
+  const hasChartData = chartData.some((pt) =>
+    trackedLabels.some((l) => typeof pt[l] === 'number' && (pt[l] as number) > 0)
+  );
   const triggerData = triggerDataByPeriod[timePeriod];
   const medicationAdherence = medicationAdherenceByPeriod[timePeriod];
 
@@ -378,41 +494,41 @@ export function HealthInsights() {
         </div>
       ) : null}
 
-      {/* Symptom Trends */}
+      {/* Your Trends — lines are the factors you chose to track */}
       <Card>
         <CardHeader>
-          <CardTitle>Symptom Trends - {timePeriodLabels[timePeriod]}</CardTitle>
+          <CardTitle>Your Trends - {timePeriodLabels[timePeriod]}</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Based on what you track: {trackedLabels.join(', ')}
+          </p>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart id="symptom-trends-area-chart" data={symptomData}>
-              <CartesianGrid strokeDasharray="3 3" key="symptom-grid" />
-              <XAxis dataKey="date" key="symptom-xaxis" />
-              <YAxis domain={[0, 10]} key="symptom-yaxis" />
-              <Tooltip key="symptom-tooltip" />
-              <Legend key="symptom-legend" />
-              <Area
-                type="monotone"
-                dataKey="pain"
-                stackId="1"
-                stroke="#B48CBF"
-                fill="#B48CBF"
-                fillOpacity={0.6}
-                name="Pain"
-                key="symptom-pain-area"
-              />
-              <Area
-                type="monotone"
-                dataKey="fatigue"
-                stackId="1"
-                stroke="#7293BB"
-                fill="#7293BB"
-                fillOpacity={0.6}
-                name="Fatigue"
-                key="symptom-fatigue-area"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart id="symptom-trends-area-chart" data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" key="symptom-grid" />
+                <XAxis dataKey="date" key="symptom-xaxis" />
+                <YAxis domain={[0, 10]} key="symptom-yaxis" />
+                <Tooltip key="symptom-tooltip" />
+                <Legend key="symptom-legend" />
+                {trackedLabels.map((label, i) => (
+                  <Area
+                    key={`area-${label}`}
+                    type="monotone"
+                    dataKey={label}
+                    stroke={FACTOR_COLORS[i % FACTOR_COLORS.length]}
+                    fill={FACTOR_COLORS[i % FACTOR_COLORS.length]}
+                    fillOpacity={0.25}
+                    name={label}
+                  />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              No trend data yet. Log check-ins and symptoms for the factors you track and they'll chart here.
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -486,17 +602,19 @@ export function HealthInsights() {
               <div key={idx} className="p-3 border rounded-lg bg-card">
                 <div className="flex items-start justify-between mb-1">
                   <h4 className="flex-1">{rec.title}</h4>
-                  <Badge
-                    variant={
-                      rec.priority === 'high'
-                        ? 'destructive'
-                        : rec.priority === 'medium'
-                        ? 'default'
-                        : 'secondary'
-                    }
-                  >
-                    {rec.priority}
-                  </Badge>
+                  {analysis?.enoughForPriority && (
+                    <Badge
+                      variant={
+                        rec.priority === 'high'
+                          ? 'destructive'
+                          : rec.priority === 'medium'
+                          ? 'default'
+                          : 'secondary'
+                      }
+                    >
+                      {rec.priority}
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground">{rec.reason}</p>
               </div>

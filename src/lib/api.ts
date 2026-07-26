@@ -321,6 +321,7 @@ export interface HealthAnalysis {
   summary: string;
   usedAI: boolean;
   hasData: boolean;
+  enoughForPriority: boolean;
 }
 
 export const insights = {
