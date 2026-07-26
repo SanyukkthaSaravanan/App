@@ -59,16 +59,25 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
         key: `m-${i}-${m.name}`,
         icon: <Pill className="h-3 w-3 mr-1" />,
         label: `${m.name}${m.dose ? ` ${m.dose}` : ''}`,
-        run: () =>
-          medsApi.create({
+        // A med named in a voice note is a one-off "as needed" event: create it
+        // inactive (so it stays out of the daily medication tracker) and record
+        // a taken dose so it appears on the calendar + doctor summary.
+        run: async () => {
+          const created = await medsApi.create({
             name: m.name,
             dosage: m.dose ?? 'Not specified',
             frequency: 'As Needed',
             timesPerDay: 1,
             scheduleTimes: [],
             startDate: new Date().toISOString(),
-            notes: m.notes || 'Logged from a voice note',
-          }),
+            notes: m.notes || 'Taken as needed (logged from a voice note)',
+            active: false,
+          });
+          const d = new Date();
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          await medsApi.toggleDose(created.id, 0, true, key).catch(() => {});
+          return created;
+        },
       })
     );
   }

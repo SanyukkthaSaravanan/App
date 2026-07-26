@@ -2,10 +2,24 @@ import { Router } from 'express';
 import { supabase, sb } from '../lib/supabase';
 import { requireAuth } from '../middleware/auth';
 import { computeInsights } from '../services/insights.service';
-import { analyzeUserHealth } from '../services/insights-ai.service';
+import { analyzeUserHealth, generateDoctorSummary } from '../services/insights-ai.service';
 
 export const insightsRouter = Router();
 insightsRouter.use(requireAuth);
+
+/**
+ * GET /api/insights/doctor-summary?period=week|month
+ * A clinician-ready narrative + highlights generated from the user's logged data.
+ */
+insightsRouter.get('/doctor-summary', async (req, res, next) => {
+  try {
+    const period = req.query.period === 'month' ? 'month' : 'week';
+    const result = await generateDoctorSummary(req.userId!, period);
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * GET /api/insights/analyze

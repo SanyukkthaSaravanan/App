@@ -155,6 +155,9 @@ export interface CreateMedicationInput {
   category?: string | null;
   prescribedBy?: string | null;
   ocr?: MedicationOcrProvenance;
+  // false = a one-off "as needed" med event (kept out of the daily tracker,
+  // shown on the calendar / doctor summary instead).
+  active?: boolean;
 }
 
 export interface MedsToday {
@@ -324,10 +327,22 @@ export interface HealthAnalysis {
   enoughForPriority: boolean;
 }
 
+export interface DoctorSummary {
+  period: 'week' | 'month';
+  patientName: string;
+  narrative: string;
+  highlights: string[];
+  generatedAt: string;
+  hasData: boolean;
+  usedAI: boolean;
+}
+
 export const insights = {
   list: () => get<Insight[]>('/api/insights'),
   refresh: () => post<Insight[]>('/api/insights/refresh', {}),
   analyze: () => get<HealthAnalysis>('/api/insights/analyze'),
+  doctorSummary: (period: 'week' | 'month') =>
+    get<DoctorSummary>(`/api/insights/doctor-summary?period=${period}`),
 };
 
 // ── Calendar ───────────────────────────────────────────────────────────────────

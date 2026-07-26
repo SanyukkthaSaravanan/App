@@ -240,6 +240,160 @@ function normalise(data: any): Omit<HealthAnalysis, 'usedAI' | 'hasData' | 'enou
 
 // ── Public entrypoint ────────────────────────────────────────────────────────
 
+// ── Doctor-ready summary ─────────────────────────────────────────────────────
+
+export interface DoctorSummary {
+  period: 'week' | 'month';
+  patientName: string;
+  narrative: string;
+  highlights: string[];
+  generatedAt: string;
+  hasData: boolean;
+  usedAI: boolean;
+}
+
+function formatDay(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+const DOCTOR_SYSTEM_PROMPT = `You write concise, factual, clinician-ready summaries of a patient's self-tracked health data for a chronic-illness app. You are given a JSON summary of ONE patient's logs for the period. Respond ONLY with JSON:
+
+{ "narrative": string, "highlights": [string] }
+
+Rules:
+- Third person, refer to the patient by the given name. NEVER assume gender — use the name or "they/them", never "he"/"she".
+- Ground every statement in the data. Cite specific days (e.g. "on Tuesday, July 28"), symptom durations, severities, and any medication taken around a symptom.
+- Note overall stability vs notable events. If a medication was taken as-needed near a symptom, mention it improved/was taken for that symptom only if the data supports it.
+- Keep the narrative to 3-6 sentences, clinical and neutral (no advice, no diagnosis).
+- highlights: 3-6 short bullet facts a doctor would want (worst symptom + day, meds taken, flare days, sleep/stress averages).
+- If data is sparse, say so briefly rather than inventing detail.`;
+
+export async function generateDoctorSummary(
+  userId: string,
+  period: 'week' | 'month'
+): Promise<DoctorSummary> {
+  const days = period === 'month' ? 30 : 7;
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const [userRes, symptomsRes, dosesRes, medsRes, flaresRes, checkinsRes, dietRes] = await Promise.all([
+    supabase.from('User').select('firstName, username').eq('id', userId).single(),
+    supabase.from('Symptom').select().eq('userId', userId).gte('loggedAt', since),
+    supabase.from('MedicationDose').select().eq('userId', userId).gte('scheduledAt', since),
+    supabase.from('Medication').select('id, name').eq('userId', userId),
+    supabase.from('FlareEvent').select().eq('userId', userId).gte('startedAt', since),
+    supabase.from('DailyCheckIn').select().eq('userId', userId).gte('date', since),
+    supabase.from('DietLog').select().eq('userId', userId).gte('ateAt', since),
+  ]);
+
+  const u = (userRes.data ?? {}) as any;
+  const patientName = u.firstName || u.username || 'The patient';
+  const symptoms = (symptomsRes.data ?? []) as any[];
+  const doses = (dosesRes.data ?? []) as any[];
+  const meds = (medsRes.data ?? []) as any[];
+  const flares = (flaresRes.data ?? []) as any[];
+  const checkins = (checkinsRes.data ?? []) as any[];
+  const diet = (dietRes.data ?? []) as any[];
+
+  const medName = new Map<string, string>(meds.map((m) => [m.id, m.name]));
+  const hasData = symptoms.length + doses.length + flares.length + checkins.length > 0;
+
+  const generatedAt = new Date().toISOString();
+  if (!hasData) {
+    return {
+      period, patientName, narrative: '', highlights: [], generatedAt, hasData: false, usedAI: false,
+    };
+  }
+
+  // Factual bundle for the model / fallback
+  const factual = {
+    patientName,
+    period,
+    symptoms: symptoms.map((s) => ({
+      day: formatDay(s.loggedAt),
+      names: Array.isArray(s.symptoms) ? s.symptoms : [],
+      severity: s.severity,
+      duration: s.duration ?? null,
+      notes: s.notes ?? null,
+    })),
+    medicationsTaken: doses
+      .filter((d) => d.takenAt)
+      .map((d) => ({ day: formatDay(d.takenAt), name: medName.get(d.medicationId) ?? 'medication' })),
+    flares: flares.map((f) => ({
+      start: formatDay(f.startedAt),
+      severity: f.severity,
+      triggers: Array.isArray(f.triggers) ? f.triggers : [],
+    })),
+    checkinCount: checkins.length,
+    avgEnergy: avgOf(checkins.map((c) => c.energy)),
+    avgStress: avgOf(checkins.map((c) => c.stress)),
+    dietTriggers: [...new Set(diet.flatMap((d) => (Array.isArray(d.triggers) ? d.triggers : [])))],
+  };
+
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const resp = await getClient().chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: DOCTOR_SYSTEM_PROMPT },
+          { role: 'user', content: JSON.stringify(factual) },
+        ],
+      });
+      const data = JSON.parse(resp.choices[0]?.message?.content ?? '{}');
+      return {
+        period, patientName,
+        narrative: typeof data.narrative === 'string' ? data.narrative : '',
+        highlights: Array.isArray(data.highlights) ? data.highlights.filter((x: any) => typeof x === 'string') : [],
+        generatedAt, hasData: true, usedAI: true,
+      };
+    } catch {
+      // fall through
+    }
+  }
+
+  return { period, patientName, ...doctorFallback(factual), generatedAt, hasData: true, usedAI: false };
+}
+
+function avgOf(arr: any[]): number {
+  const nums = arr.filter((v) => typeof v === 'number');
+  return nums.length ? +(nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(1) : 0;
+}
+
+function doctorFallback(f: any): { narrative: string; highlights: string[] } {
+  const parts: string[] = [];
+  const label = f.period === 'month' ? 'the past month' : 'the past week';
+  if (f.symptoms.length === 0) {
+    parts.push(`Over ${label}, ${f.patientName} logged no specific symptoms.`);
+  } else {
+    const worst = [...f.symptoms].sort((a, b) => (b.severity || 0) - (a.severity || 0))[0];
+    parts.push(
+      `Over ${label}, ${f.patientName} logged ${f.symptoms.length} symptom ${f.symptoms.length === 1 ? 'entry' : 'entries'}.`
+    );
+    if (worst) {
+      parts.push(
+        `The most notable was ${worst.names.join(', ') || 'a symptom'} on ${worst.day} (severity ${worst.severity}/10${worst.duration ? `, lasting ${worst.duration}` : ''}).`
+      );
+    }
+  }
+  if (f.medicationsTaken.length) {
+    const names = [...new Set(f.medicationsTaken.map((m: any) => m.name))];
+    parts.push(`Medications taken during this period: ${names.join(', ')}.`);
+  }
+  if (f.flares.length) parts.push(`${f.flares.length} flare event(s) were recorded.`);
+  if (f.checkinCount) parts.push(`Across ${f.checkinCount} check-in(s), average energy was ${f.avgEnergy}/5 and average stress ${f.avgStress}/10.`);
+
+  const highlights: string[] = [];
+  if (f.symptoms.length) highlights.push(`${f.symptoms.length} symptom entries logged`);
+  if (f.medicationsTaken.length) highlights.push(`Meds taken: ${[...new Set(f.medicationsTaken.map((m: any) => m.name))].join(', ')}`);
+  if (f.flares.length) highlights.push(`${f.flares.length} flare event(s)`);
+  if (f.checkinCount) highlights.push(`Avg stress ${f.avgStress}/10, avg energy ${f.avgEnergy}/5`);
+  if (f.dietTriggers.length) highlights.push(`Diet triggers noted: ${f.dietTriggers.join(', ')}`);
+
+  return { narrative: parts.join(' '), highlights };
+}
+
 export async function analyzeUserHealth(userId: string): Promise<HealthAnalysis> {
   const data = await loadData(userId);
   const totalEntries =

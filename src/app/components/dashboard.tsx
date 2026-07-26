@@ -79,6 +79,15 @@ export function Dashboard({ userName }: DashboardProps) {
           </motion.button>
         );
       })}
+
+      {/* Logout — in the sidebar so it's easy to reach on mobile */}
+      <button
+        onClick={onLogout}
+        className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-gray-700 hover:bg-red-50 hover:text-red-600 mt-2 border-t pt-4"
+      >
+        <LogOut className="h-5 w-5" />
+        <span>Logout</span>
+      </button>
     </nav>
   );
 
@@ -131,15 +140,6 @@ export function Dashboard({ userName }: DashboardProps) {
                 Welcome, <span className="font-medium text-gray-900">{userName}</span>
               </span>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLogout}
-              className="hidden lg:flex items-center gap-2"
-            >
-              <LogOut className="h-4 w-4" />
-              Logout
-            </Button>
           </div>
         </div>
       </header>

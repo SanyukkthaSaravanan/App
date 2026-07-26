@@ -31,6 +31,8 @@ const medSchema = z.object({
   drugClass: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
   prescribedBy: z.string().nullable().optional(),
+  // false = one-off "as needed" med event (hidden from the daily tracker)
+  active: z.boolean().optional(),
   // OCR provenance — when present, the raw scan is stored as an OcrDocument
   // and linked to this medication.
   ocr: ocrProvenanceSchema.optional(),
@@ -192,7 +194,7 @@ medicationsRouter.post('/', async (req, res, next) => {
       endDate: body.endDate ? new Date(body.endDate).toISOString() : null,
       color: body.color ?? '#7293BB',
       notes: body.notes ?? null,
-      active: true,
+      active: body.active ?? true,
       genericName: body.genericName ?? null,
       drugClass: body.drugClass ?? null,
       category: body.category ?? null,

@@ -5,6 +5,7 @@ import {
   checkins as checkinsApi,
   symptoms as symptomsApi,
   type HealthAnalysis,
+  type DoctorSummary,
 } from '../../lib/api';
 import { useAuth } from '../../context/auth-context';
 import { trackerFor } from '../../lib/trackers';
@@ -34,6 +35,9 @@ import {
   AlertCircle,
   Lightbulb,
   X,
+  FileText,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -261,6 +265,31 @@ export function HealthInsights() {
       : ['Pain', 'Fatigue / Energy'];
   const [chartData, setChartData] = useState<Record<string, number | string>[]>([]);
 
+  // Doctor-ready summary
+  const [doctorSummary, setDoctorSummary] = useState<DoctorSummary | null>(null);
+  const [doctorPeriod, setDoctorPeriod] = useState<'week' | 'month'>('week');
+  const [generatingDoctor, setGeneratingDoctor] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const generateDoctorSummary = () => {
+    setGeneratingDoctor(true);
+    setCopied(false);
+    insightsApi
+      .doctorSummary(doctorPeriod)
+      .then(setDoctorSummary)
+      .catch(() => setDoctorSummary(null))
+      .finally(() => setGeneratingDoctor(false));
+  };
+
+  const copyDoctorSummary = () => {
+    if (!doctorSummary) return;
+    const text = [doctorSummary.narrative, '', ...doctorSummary.highlights.map((h) => `• ${h}`)].join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   const runAnalysis = () => {
     setAnalyzing(true);
     insightsApi
@@ -453,6 +482,87 @@ export function HealthInsights() {
               </Popover>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Doctor-ready summary */}
+      <Card style={{ backgroundColor: '#F8F6FF' }}>
+        <CardHeader>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" style={{ color: '#7293BB' }} />
+                Doctor-ready summary
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                A clinical summary of your logs to share at appointments
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {(['week', 'month'] as const).map((p) => (
+                <Button
+                  key={p}
+                  size="sm"
+                  variant={doctorPeriod === p ? 'default' : 'outline'}
+                  style={doctorPeriod === p ? { backgroundColor: '#7293BB', color: 'white' } : {}}
+                  onClick={() => setDoctorPeriod(p)}
+                >
+                  {p === 'week' ? 'This week' : 'This month'}
+                </Button>
+              ))}
+              <Button
+                size="sm"
+                onClick={generateDoctorSummary}
+                disabled={generatingDoctor}
+                style={{ backgroundColor: '#A5D3CF', color: 'white' }}
+              >
+                {generatingDoctor ? 'Generating…' : 'Generate'}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!doctorSummary ? (
+            <p className="text-sm text-muted-foreground">
+              Pick a period and tap <strong>Generate</strong> to create a summary from your logged data.
+            </p>
+          ) : !doctorSummary.hasData ? (
+            <p className="text-sm text-muted-foreground">
+              Not enough logged data for this period yet. Keep logging symptoms, meds, and check-ins.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-4 bg-white rounded-lg border">
+                <p className="text-sm leading-relaxed whitespace-pre-line">{doctorSummary.narrative}</p>
+                {doctorSummary.highlights.length > 0 && (
+                  <ul className="mt-3 space-y-1">
+                    {doctorSummary.highlights.map((h, i) => (
+                      <li key={i} className="text-sm text-muted-foreground flex gap-2">
+                        <span>•</span>
+                        <span>{h}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <Button size="sm" variant="outline" onClick={copyDoctorSummary}>
+                  {copied ? (
+                    <>
+                      <Check className="h-4 w-4 mr-1" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4 mr-1" /> Copy
+                    </>
+                  )}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Generated {new Date(doctorSummary.generatedAt).toLocaleString()}
+                </span>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
