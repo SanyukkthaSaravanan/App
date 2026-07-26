@@ -19,99 +19,29 @@ interface DayData {
   notes?: string;
 }
 
-const mockDayData: { [key: string]: DayData } = {
-  '2025-01-08': {
-    date: new Date('2025-01-08'),
-    isFlareDay: true,
-    symptoms: [{ name: 'Joint Pain', severity: 8 }, { name: 'Fatigue', severity: 7 }],
-    medications: [
-      { name: 'Methotrexate', taken: true },
-      { name: 'Prednisone', taken: true },
-    ],
-    nutrition: [
-      { meal: 'Breakfast', items: ['Oatmeal', 'Blueberries'] },
-      { meal: 'Lunch', items: ['Salad', 'Grilled chicken'] },
-    ],
-    notes: 'Flare started, reduced activity',
-  },
-  '2025-01-10': {
-    date: new Date('2025-01-10'),
-    isFlareDay: true,
-    symptoms: [{ name: 'Joint Pain', severity: 6 }, { name: 'Fatigue', severity: 6 }],
-    medications: [
-      { name: 'Methotrexate', taken: true },
-      { name: 'Prednisone', taken: false },
-    ],
-    nutrition: [
-      { meal: 'Breakfast', items: ['Smoothie'] },
-      { meal: 'Dinner', items: ['Soup', 'Bread'] },
-    ],
-  },
-  '2025-01-12': {
-    date: new Date('2025-01-12'),
-    isFlareDay: false,
-    symptoms: [{ name: 'Joint Pain', severity: 4 }],
-    medications: [
-      { name: 'Methotrexate', taken: true },
-      { name: 'Prednisone', taken: true },
-    ],
-    nutrition: [
-      { meal: 'Breakfast', items: ['Eggs', 'Toast'] },
-      { meal: 'Lunch', items: ['Pasta', 'Vegetables'] },
-      { meal: 'Dinner', items: ['Fish', 'Rice'] },
-    ],
-    notes: 'Feeling better today',
-  },
-  '2025-01-15': {
-    date: new Date('2025-01-15'),
-    isFlareDay: false,
-    symptoms: [],
-    medications: [],
-    nutrition: [],
-    appointments: [
-      { type: 'Doctor', time: '10:30 AM', provider: 'Dr. Sarah Chen - Rheumatologist' },
-    ],
-    notes: 'Routine checkup appointment',
-  },
-  '2025-01-18': {
-    date: new Date('2025-01-18'),
-    isFlareDay: false,
-    symptoms: [],
-    medications: [],
-    nutrition: [],
-    appointments: [
-      { type: 'Physiotherapist', time: '2:00 PM', provider: 'Maria Rodriguez - Physical Therapy' },
-    ],
-    notes: 'Physical therapy session for joint mobility',
-  },
-  '2025-01-22': {
-    date: new Date('2025-01-22'),
-    isFlareDay: false,
-    symptoms: [],
-    medications: [],
-    nutrition: [],
-    appointments: [
-      { type: 'Doctor', time: '11:00 AM', provider: 'Dr. Sarah Chen - Rheumatologist' },
-      { type: 'Lab Work', time: '9:30 AM', provider: 'Quest Diagnostics' },
-    ],
-    notes: 'Follow-up appointment and blood work',
-  },
-};
-
 export function HealthCalendar() {
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 0, 1)); // January 2025
+  // Default to the current month in the user's local time.
+  const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
 
   useEffect(() => {
+    // Widen the query by a day on each side so events near month edges that
+    // shift across the UTC/local boundary are still fetched, then bucketed by
+    // local date below.
     const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    start.setDate(start.getDate() - 1);
     const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0, 23, 59, 59);
+    end.setDate(end.getDate() + 1);
     calendarApi.list(start.toISOString(), end.toISOString()).then(setCalEvents).catch(console.error);
   }, [currentDate]);
 
+  // Bucket events by the user's LOCAL calendar date (syncs to their location),
+  // not the raw UTC portion of the ISO timestamp.
   const eventsByDate = calEvents.reduce<Record<string, CalendarEvent[]>>((acc, ev) => {
-    const key = ev.date.slice(0, 10);
+    const d = new Date(ev.date);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     if (!acc[key]) acc[key] = [];
     acc[key].push(ev);
     return acc;
@@ -140,7 +70,6 @@ export function HealthCalendar() {
   const getDayData = (day: number): DayData | null => {
     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
     const key = formatDateKey(date);
-    if (mockDayData[key]) return mockDayData[key];
     const evs = eventsByDate[key];
     if (!evs || evs.length === 0) return null;
     // Build a DayData-shaped object from API events
@@ -174,6 +103,7 @@ export function HealthCalendar() {
   const daysInMonth = getDaysInMonth(currentDate);
   const firstDay = getFirstDayOfMonth(currentDate);
   const monthName = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const now = new Date(); // real "today" in the user's local time
 
   const calendarDays = [];
   // Add empty cells for days before the first of the month
@@ -183,10 +113,10 @@ export function HealthCalendar() {
   // Add cells for each day of the month
   for (let day = 1; day <= daysInMonth; day++) {
     const dayData = getDayData(day);
-    const isToday = 
-      day === 13 && 
-      currentDate.getMonth() === 0 && 
-      currentDate.getFullYear() === 2025;
+    const isToday =
+      day === now.getDate() &&
+      currentDate.getMonth() === now.getMonth() &&
+      currentDate.getFullYear() === now.getFullYear();
 
     const hasMissedMeds = dayData?.medications.some(m => !m.taken);
     const hasTriggerFoods = dayData?.nutrition.some(meal => 

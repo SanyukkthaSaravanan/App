@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { checkins as checkinsApi } from '../../lib/api';
+import {
+  checkins as checkinsApi,
+  symptoms as symptomsApi,
+  medications as medsApi,
+} from '../../lib/api';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -130,13 +134,75 @@ const defaultFactors: TrackingFactor[] = [
   },
 ];
 
+// Local-timezone date key (YYYY-MM-DD) so days bucket by the user's location.
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+interface WeekSeries {
+  energy: number[];
+  pain: number[];
+  sleep: number[];
+  stress: number[];
+}
+
 export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOverviewProps) {
   const [hasCheckedIn, setHasCheckedIn] = useState(false);
+  const [medCount, setMedCount] = useState<number | null>(null);
+  const [weekSeries, setWeekSeries] = useState<WeekSeries>({
+    energy: [], pain: [], sleep: [], stress: [],
+  });
 
   useEffect(() => {
     checkinsApi.today().then((list) => {
       if (list.length > 0) setHasCheckedIn(true);
     }).catch(() => {});
+
+    // Medication count for the dashboard card (Task 4)
+    medsApi.list().then((meds) => setMedCount(meds.length)).catch(() => setMedCount(0));
+
+    // Last-7-days series from real logged data (Task 8)
+    const now = new Date();
+    const from = new Date(now);
+    from.setDate(now.getDate() - 6);
+    from.setHours(0, 0, 0, 0);
+
+    Promise.all([
+      checkinsApi.list(from.toISOString(), now.toISOString()).catch(() => []),
+      symptomsApi.list().catch(() => []),
+    ]).then(([checkins, symptoms]) => {
+      const days: string[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(now.getDate() - i);
+        days.push(dateKey(d));
+      }
+
+      const checkinByDay = new Map(checkins.map((c) => [dateKey(new Date(c.date)), c]));
+      const sevByDay = new Map<string, number[]>();
+      for (const s of symptoms) {
+        const k = dateKey(new Date(s.loggedAt));
+        if (!sevByDay.has(k)) sevByDay.set(k, []);
+        sevByDay.get(k)!.push(s.severity);
+      }
+
+      const energy: number[] = [], pain: number[] = [], sleep: number[] = [], stress: number[] = [];
+      for (const k of days) {
+        const c = checkinByDay.get(k);
+        energy.push(c?.energy ? Math.min(10, c.energy * 2) : 0); // energy stored 1-5 → 0-10
+        stress.push(c?.stress ?? 0);
+        sleep.push(
+          c?.sleep === 'good' ? 8 : c?.sleep === 'okay' ? 5 : c?.sleep === 'poor' ? 2 : 0
+        );
+        const sev = sevByDay.get(k);
+        pain.push(
+          sev && sev.length
+            ? Math.round(sev.reduce((a, b) => a + b, 0) / sev.length)
+            : c?.painIntensity === 'severe' ? 8 : c?.painIntensity === 'moderate' ? 5 : c?.painIntensity === 'mild' ? 3 : 0
+        );
+      }
+      setWeekSeries({ energy, pain, sleep, stress });
+    });
   }, []);
   const [isFlareDay, setIsFlareDay] = useState(true);
   const [flareStartDate] = useState(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)); // 2 days ago
@@ -153,9 +219,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
     mood: 0,
     notes: '',
   });
-  const [showCaregiverLogin, setShowCaregiverLogin] = useState(false);
-  const [caregiverEmail, setCaregiverEmail] = useState('');
-  const [caregiverPassword, setCaregiverPassword] = useState('');
 
   const today = new Date();
   const todayStr = today.toLocaleDateString('en-US', {
@@ -197,18 +260,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
       sleep: additionalData.sleep === 1 ? 'poor' : additionalData.sleep === 5 ? 'good' : 'okay',
       notes: checkInData.notes || undefined,
     }).catch(console.error);
-  };
-
-  const handleCaregiverLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (caregiverEmail && caregiverPassword) {
-      // Mock caregiver login - just close the modal
-      setShowCaregiverLogin(false);
-      setCaregiverEmail('');
-      setCaregiverPassword('');
-      // In a real app, this would authenticate and navigate to caregiver view
-      alert('Caregiver login successful! (This is a demo)');
-    }
   };
 
   const hasEnabledFactors = trackingFactors.filter(f => f.enabled).length > 0;
@@ -640,14 +691,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
                       <p className="text-sm text-muted-foreground">Optional - add anything you'd like to remember</p>
                     </div>
                     <div className="space-y-3">
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant="outline" style={{ backgroundColor: '#A5D3CF20', borderColor: '#A5D3CF' }}>
-                          3/4 meds taken
-                        </Badge>
-                        <Badge variant="outline" style={{ backgroundColor: '#F2EEDA', borderColor: '#F2EEDA' }}>
-                          2 meals logged
-                        </Badge>
-                      </div>
                       <Textarea
                         placeholder="How are you feeling today? Any observations..."
                         value={checkInData.notes}
@@ -785,96 +828,112 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
         </motion.div>
       )}
 
-      {/* Core Symptom Snapshot - Last 7 Days */}
+      {/* Core Symptom Snapshot - Last 7 Days (real logged data) */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.2 }}>
-        <h4 className="mb-3">Last 7 days</h4>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {[
-            {
-              label: 'Energy',
-              icon: Zap,
-              color: '#A5D3CF',
-              trend: 'up',
-              visual: [3, 4, 3, 5, 4, 6, 5],
-            },
-            {
-              label: 'Pain',
-              icon: Activity,
-              color: '#E89BA1',
-              trend: 'down',
-              visual: [7, 6, 5, 6, 5, 4, 5],
-            },
-            {
-              label: 'Sleep',
-              icon: Moon,
-              color: '#B48CBF',
-              trend: 'stable',
-              visual: [4, 5, 3, 6, 5, 5, 4],
-            },
-            {
-              label: 'Stress',
-              icon: Brain,
-              color: '#7293BB',
-              trend: 'down',
-              visual: [6, 5, 5, 4, 4, 3, 4],
-            },
-          ].map((symptom, i) => {
-            const Icon = symptom.icon;
+        <div className="flex items-center justify-between mb-3">
+          <h4>Last 7 days</h4>
+          <Button variant="ghost" size="sm" onClick={() => onNavigate('insights')}>
+            View insights
+          </Button>
+        </div>
+        {(() => {
+          const metrics = [
+            { label: 'Energy', icon: Zap, color: '#A5D3CF', series: weekSeries.energy, goodDir: 'up' as const },
+            { label: 'Pain', icon: Activity, color: '#E89BA1', series: weekSeries.pain, goodDir: 'down' as const },
+            { label: 'Sleep', icon: Moon, color: '#B48CBF', series: weekSeries.sleep, goodDir: 'up' as const },
+            { label: 'Stress', icon: Brain, color: '#7293BB', series: weekSeries.stress, goodDir: 'down' as const },
+          ];
+          const hasData = metrics.some((m) => m.series.some((v) => v > 0));
+
+          const trendOf = (arr: number[]): 'up' | 'down' | 'stable' => {
+            const nz = arr.filter((v) => v > 0);
+            if (nz.length < 2) return 'stable';
+            const half = Math.floor(nz.length / 2);
+            const firstAvg = nz.slice(0, half).reduce((a, b) => a + b, 0) / half;
+            const secondAvg = nz.slice(half).reduce((a, b) => a + b, 0) / (nz.length - half);
+            if (secondAvg > firstAvg + 0.5) return 'up';
+            if (secondAvg < firstAvg - 0.5) return 'down';
+            return 'stable';
+          };
+
+          if (!hasData) {
             return (
-              <motion.div key={symptom.label} whileHover={{ y: -3, scale: 1.02 }} transition={{ duration: 0.2 }}>
               <Card>
-                <CardContent className="pt-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="p-1.5 rounded"
-                          style={{ backgroundColor: symptom.color }}
-                        >
-                          <Icon className="h-3 w-3 text-white" />
-                        </div>
-                        <span className="text-sm">{symptom.label}</span>
-                      </div>
-                      {symptom.trend === 'up' && (
-                        <TrendingUp className="h-3 w-3 text-green-600" />
-                      )}
-                      {symptom.trend === 'down' && (
-                        <TrendingDown className="h-3 w-3 text-amber-600" />
-                      )}
-                    </div>
-                    {/* Mini visual representation */}
-                    <div className="flex items-end gap-0.5 h-8">
-                      {symptom.visual.map((value, idx) => (
-                        <div
-                          key={idx}
-                          className="flex-1 rounded-sm"
-                          style={{
-                            backgroundColor: symptom.color,
-                            height: `${(value / 10) * 100}%`,
-                            opacity: 0.6,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
+                <CardContent className="py-8 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    No data yet this week. Check in daily and log symptoms to see your trends here.
+                  </p>
                 </CardContent>
               </Card>
-              </motion.div>
             );
-          })}
-        </div>
+          }
+
+          return (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {metrics.map((metric) => {
+                const Icon = metric.icon;
+                const trend = trendOf(metric.series);
+                // A trend is "good" (green) when it moves in the metric's good direction.
+                const good = trend !== 'stable' && trend === metric.goodDir;
+                return (
+                  <motion.div key={metric.label} whileHover={{ y: -3, scale: 1.02 }} transition={{ duration: 0.2 }}>
+                    <Card>
+                      <CardContent className="pt-4">
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className="p-1.5 rounded" style={{ backgroundColor: metric.color }}>
+                                <Icon className="h-3 w-3 text-white" />
+                              </div>
+                              <span className="text-sm">{metric.label}</span>
+                            </div>
+                            {trend === 'up' && (
+                              <TrendingUp className={`h-3 w-3 ${good ? 'text-green-600' : 'text-amber-600'}`} />
+                            )}
+                            {trend === 'down' && (
+                              <TrendingDown className={`h-3 w-3 ${good ? 'text-green-600' : 'text-amber-600'}`} />
+                            )}
+                          </div>
+                          <div className="flex items-end gap-0.5 h-8">
+                            {metric.series.map((value, idx) => (
+                              <div
+                                key={idx}
+                                title={`${value || '—'}`}
+                                className="flex-1 rounded-sm bg-gray-100"
+                                style={{ minHeight: '2px' }}
+                              >
+                                <div
+                                  className="w-full rounded-sm"
+                                  style={{
+                                    backgroundColor: metric.color,
+                                    height: `${(value / 10) * 100}%`,
+                                    opacity: 0.6,
+                                  }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </motion.div>
 
       {/* Body Map Summary */}
       
 
-      {/* Medication Status - Non-Policing */}
+      {/* Medication Status — reflects the Medications page */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Pill className="h-5 w-5" style={{ color: '#CDADD0' }} />
-            Medications
+            Medication taken
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -882,13 +941,23 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="h-5 w-5 text-green-600" />
-                <span>Taken today ✓</span>
+                <span>
+                  {medCount === null
+                    ? 'Loading…'
+                    : medCount === 0
+                    ? 'No medications yet'
+                    : `${medCount} medication${medCount === 1 ? '' : 's'} tracked`}
+                </span>
               </div>
               <p className="text-sm text-muted-foreground pl-7">
-                3 of 4 medications logged
+                {medCount === 0
+                  ? 'Add your medications to start tracking doses'
+                  : 'Mark doses as taken on the Medications page'}
               </p>
             </div>
-            <Button variant="outline" onClick={() => onNavigate('medications')}>Log meds</Button>
+            <Button variant="outline" onClick={() => onNavigate('medications')}>
+              {medCount === 0 ? 'Add meds' : 'Log meds'}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -937,24 +1006,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
 
       {/* Notes & Voice Logs */}
       
-
-      {/* Care / Support Access */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.5 }}>
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Heart className="h-5 w-5" style={{ color: '#7293BB' }} />
-            Support
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <Button variant="outline" className="w-full justify-center" onClick={() => setShowCaregiverLogin(true)}>
-            <Users className="h-4 w-4 mr-2" />
-            Caregiver access
-          </Button>
-        </CardContent>
-      </Card>
-      </motion.div>
 
       {/* Empty State (shown when no data) */}
       {false && ( // Toggle this based on data presence
@@ -1025,97 +1076,6 @@ export function DashboardOverview({ onNavigate, onEnableFlareMode }: DashboardOv
         </DialogContent>
       </Dialog>
 
-      {/* Caregiver Login Dialog */}
-      <Dialog open={showCaregiverLogin} onOpenChange={setShowCaregiverLogin}>
-        <DialogContent className="max-w-[500px] rounded-[28px] p-0 max-h-[90vh] overflow-hidden">
-          <VisuallyHidden>
-            <DialogTitle>Caregiver Login</DialogTitle>
-            <DialogDescription>
-              Login to your caregiver account to access patient information
-            </DialogDescription>
-          </VisuallyHidden>
-          <div className="p-8">
-            {/* Logo & Welcome */}
-            <div className="text-center mb-8">
-              <img src={fullLogoImage} alt="Flaire" className="mb-4 mx-auto h-auto max-w-[200px]" style={{ mixBlendMode: 'multiply' }} />
-              <h2 className="text-2xl font-semibold mb-2">Login to your Caregiver Account</h2>
-              <p className="text-sm text-muted-foreground">Access and support your loved ones</p>
-            </div>
-
-            {/* Login Form */}
-            <form onSubmit={handleCaregiverLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="caregiver-email">Email</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="caregiver-email"
-                    type="email"
-                    placeholder="you@example.com"
-                    className="pl-10"
-                    value={caregiverEmail}
-                    onChange={(e) => setCaregiverEmail(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="caregiver-password">Password</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="caregiver-password"
-                    type="password"
-                    placeholder="••••••••"
-                    className="pl-10"
-                    value={caregiverPassword}
-                    onChange={(e) => setCaregiverPassword(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-              <Button
-                type="submit"
-                className="w-full mt-6"
-                size="lg"
-                style={{ backgroundColor: '#7293BB' }}
-              >
-                Log In
-              </Button>
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-300"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white text-muted-foreground">or</span>
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                size="lg"
-                onClick={() => {
-                  // Mock Google login for caregiver
-                  setShowCaregiverLogin(false);
-                  alert('Caregiver Google login successful! (This is a demo)');
-                }}
-              >
-                <Chrome className="mr-2 h-5 w-5" />
-                Log In with Google
-              </Button>
-            </form>
-            <div className="mt-4 text-center">
-              <button
-                className="text-sm text-muted-foreground hover:underline"
-                style={{ color: '#7293BB' }}
-              >
-                Forgot password?
-              </button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

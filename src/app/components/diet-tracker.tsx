@@ -30,15 +30,6 @@ const foodCategories = [
   'Beverage',
 ];
 
-const commonTriggers = [
-  'Dairy',
-  'Gluten',
-  'Nightshades',
-  'Sugar',
-  'Processed Foods',
-  'Caffeine',
-  'Alcohol',
-];
 
 export function DietTracker() {
   const [entries, setEntries] = useState<FoodEntry[]>([]);
@@ -496,24 +487,6 @@ export function DietTracker() {
           </CardContent>
         </Card>
       )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Common Autoimmune Triggers</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground mb-3">
-            Watch for these common food triggers:
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {commonTriggers.map((trigger) => (
-              <Badge key={trigger} variant="secondary">
-                {trigger}
-              </Badge>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
     </motion.div>
   );
 }
