@@ -34,6 +34,8 @@ export function initAnalytics() {
     // Never record the screen — this app shows sensitive health information.
     disable_session_recording: true,
   });
+  // Expose for debugging / manual capture from the browser console.
+  if (typeof window !== 'undefined') (window as unknown as { posthog: typeof posthog }).posthog = posthog;
 }
 
 /** Tie subsequent events to a user. Only non-health account fields are sent. */
@@ -81,9 +83,15 @@ export function startLogTimer(logType: LogType) {
 export function trackLogCompleted(logType: LogType, props: Record<string, unknown> = {}) {
   const start = logTimers.get(logType);
   logTimers.delete(logType);
-  if (!analyticsEnabled || start == null) return;
+  if (!analyticsEnabled || start == null) {
+    // Helps diagnose a missing event: shows whether analytics is on and whether
+    // a matching startLogTimer ran before this save.
+    console.debug('[analytics] log_completed skipped', { logType, analyticsEnabled, hadTimer: start != null });
+    return;
+  }
   const durationMs = Math.round(performance.now() - start);
   const durationSeconds = Math.round((durationMs / 1000) * 10) / 10;
+  console.debug('[analytics] log_completed', { logType, durationSeconds, ...props });
   posthog.capture('log_completed', {
     log_type: logType,
     duration_ms: durationMs,
