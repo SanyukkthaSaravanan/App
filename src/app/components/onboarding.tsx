@@ -138,6 +138,9 @@ export function Onboarding() {
                         value={condition}
                         onChange={(e) => setCondition(e.target.value)}
                       />
+                      <p className="text-xs text-muted-foreground">
+                        If you cannot find your condition in the list below, type it in here.
+                      </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {CONDITION_SUGGESTIONS.map((c) => (

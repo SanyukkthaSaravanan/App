@@ -68,6 +68,23 @@ const GENERAL_SYMPTOM_SUGGESTIONS = [
   'Low Mood',
 ];
 
+// Whisper tends to "hallucinate" these stock phrases when it hears silence or
+// noise instead of speech (they're common in its training data). Treat them as
+// no input so we can prompt the user for a real symptom.
+const WHISPER_NOISE = new Set([
+  'thank you for watching', 'thanks for watching', 'thank you for watching!',
+  'thank you', 'thanks', 'you', 'bye', 'okay', 'ok', 'so', 'um', 'uh',
+  'please subscribe', 'like and subscribe', 'subscribe',
+]);
+
+const VALID_SYMPTOM_MSG = 'Please input a valid symptom (e.g. Headache).';
+
+/** True when a transcript is empty or a known Whisper noise phrase. */
+function isNoiseTranscript(text: string): boolean {
+  const norm = text.toLowerCase().replace(/[.!?,]/g, '').trim();
+  return norm.length === 0 || WHISPER_NOISE.has(norm);
+}
+
 export function BodyMapNew() {
   const [selectedView, setSelectedView] = useState<ViewType>('front');
   const [symptoms, setSymptoms] = useState<BodyPartSymptom[]>([]);
@@ -101,8 +118,18 @@ export function BodyMapNew() {
   const [generalNotes, setGeneralNotes] = useState('');
   const [nlpParsed, setNlpParsed] = useState(false);
 
+  // Error shown under the symptom voice input when nothing usable was heard.
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
   const whisper = useWhisper({
     onTranscript: (transcript) => {
+      // Silence/noise → Whisper often returns "Thank you for watching!" etc.
+      // Don't stuff that into the note; prompt for a real symptom instead.
+      if (isNoiseTranscript(transcript)) {
+        setVoiceError(VALID_SYMPTOM_MSG);
+        return;
+      }
+      setVoiceError(null);
       setGeneralNotes((prev) => (prev ? prev + ' ' : '') + transcript);
       applyNlpResult(transcript);
     },
@@ -288,6 +315,7 @@ export function BodyMapNew() {
     setGeneralSeverity(5);
     setGeneralNotes('');
     setNlpParsed(false);
+    setVoiceError(null);
     setCrossParsed(null);
     setGeneralOpen(true);
   };
@@ -335,7 +363,7 @@ export function BodyMapNew() {
     try {
       const parsed = await nlp.parseLog(transcript);
       const primary = parsed.symptoms[0];
-      if (primary) {
+      if (primary && primary.name?.trim()) {
         setGeneralName(primary.name);
         if (primary.severity != null) setGeneralSeverity(primary.severity);
         const extra = parsed.symptoms.slice(1).map((s) => s.name);
@@ -344,9 +372,13 @@ export function BodyMapNew() {
             (prev ? prev + ' ' : '') + `Also mentioned: ${extra.join(', ')}`
           );
         }
+        setVoiceError(null);
+        setCrossParsed(parsed);
+        setNlpParsed(true);
+      } else {
+        // Heard speech, but nothing that reads as a symptom.
+        setVoiceError(VALID_SYMPTOM_MSG);
       }
-      setCrossParsed(parsed);
-      setNlpParsed(true);
     } catch {
       // Parser unavailable — transcript is already in the notes field, no-op
     }
@@ -720,11 +752,6 @@ export function BodyMapNew() {
               <div className="flex items-center justify-between">
                 <Label htmlFor="general-notes">Notes (optional)</Label>
                 <div className="flex items-center gap-2">
-                  {nlpParsed && (
-                    <span className="text-xs text-green-600 font-medium px-2 py-0.5 bg-green-50 border border-green-200 rounded-full">
-                      ✓ NLP parsed
-                    </span>
-                  )}
                   <Button
                     type="button"
                     size="sm"
@@ -744,7 +771,7 @@ export function BodyMapNew() {
                     ) : (
                       <>
                         <Mic className="h-4 w-4 mr-2" />
-                        Voice input
+                        Start voice input
                       </>
                     )}
                   </Button>
@@ -766,7 +793,13 @@ export function BodyMapNew() {
               {isProcessing && (
                 <p className="text-sm text-muted-foreground flex items-center gap-2">
                   <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                  Transcribing with Whisper AI…
+                  Processing…
+                </p>
+              )}
+              {voiceError && !isRecording && !isProcessing && (
+                <p className="text-sm text-red-600 flex items-center gap-2">
+                  <span className="w-2 h-2 bg-red-500 rounded-full" />
+                  {voiceError}
                 </p>
               )}
             </div>

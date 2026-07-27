@@ -121,7 +121,7 @@ export function VoiceLogInput({ hint, onParsed }: VoiceLogInputProps) {
               disabled={!transcript.trim()}
             >
               <Sparkles className="h-4 w-4 mr-2" />
-              Process &amp; fill
+              Accept
             </Button>
             <Button size="sm" variant="outline" onClick={reRecord}>
               <RotateCcw className="h-4 w-4 mr-2" />
