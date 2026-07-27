@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { medications as medsApi, ocr as ocrApi, type OCRLiveResult, type ParsedLog } from '../../lib/api';
+import { startLogTimer, trackLogCompleted } from '../../lib/analytics';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -149,6 +150,7 @@ export function MedicationManager() {
       medication.id = created.id;
     } catch {}
 
+    trackLogCompleted('medication', { method: fromScan ? 'scan' : 'manual' });
     setMedications([...medications, medication]);
     setNewMed({ name: '', dosage: '', frequency: 'Daily', time: '', notes: '' });
     setScanResult(null);
@@ -374,7 +376,7 @@ export function MedicationManager() {
               Track your medications and doses
             </p>
           </div>
-          <Button onClick={() => setShowAddForm(!showAddForm)}>
+          <Button onClick={() => { const next = !showAddForm; setShowAddForm(next); if (next) startLogTimer('medication'); }}>
             <Plus className="h-4 w-4 mr-2" />
             Add Medication
           </Button>

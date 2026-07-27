@@ -61,4 +61,36 @@ export function trackEvent(event: string, props?: Record<string, unknown>) {
   posthog.capture(event, props);
 }
 
+// ── Log-duration timing ─────────────────────────────────────────────────────
+// Measures how long a user takes to complete a log (symptom / medication /
+// diet), so we can prove logging stays under 60s. Uses a monotonic clock
+// (performance.now) so it's immune to system-clock changes.
+export type LogType = 'symptom' | 'medication' | 'diet';
+
+const logTimers = new Map<LogType, number>();
+
+/** Start the clock for a log — call when the form/dialog opens. */
+export function startLogTimer(logType: LogType) {
+  logTimers.set(logType, performance.now());
+}
+
+/**
+ * Fire a `log_completed` event with how long it took. No-op if analytics is
+ * off or no timer was started (so a save without a matching open is ignored).
+ */
+export function trackLogCompleted(logType: LogType, props: Record<string, unknown> = {}) {
+  const start = logTimers.get(logType);
+  logTimers.delete(logType);
+  if (!analyticsEnabled || start == null) return;
+  const durationMs = Math.round(performance.now() - start);
+  const durationSeconds = Math.round((durationMs / 1000) * 10) / 10;
+  posthog.capture('log_completed', {
+    log_type: logType,
+    duration_ms: durationMs,
+    duration_seconds: durationSeconds,
+    under_60s: durationSeconds <= 60,
+    ...props,
+  });
+}
+
 export { posthog };

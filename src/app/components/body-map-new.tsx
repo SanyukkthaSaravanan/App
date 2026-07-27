@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { symptoms as symptomsApi, nlp, type ParsedLog } from '../../lib/api';
+import { startLogTimer, trackLogCompleted } from '../../lib/analytics';
 import { useWhisper } from '../../hooks/useWhisper';
 import { DetectedExtras } from './detected-extras';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -230,6 +231,7 @@ export function BodyMapNew() {
   };
 
   const openHotspot = (hotspot: Hotspot) => {
+    startLogTimer('symptom'); // time from opening the form to a successful save
     // Pre-fill with the most recent existing entry for this part, if any
     const existing = getPartSymptoms(hotspot.id)[0];
     setActiveHotspot(hotspot);
@@ -275,11 +277,13 @@ export function BodyMapNew() {
       entry.id = created.id;
     } catch {}
     setSavingSymptom(false);
+    trackLogCompleted('symptom', { surface: 'body_map', method: 'manual', severity: entry.severity });
     setSymptoms([entry, ...symptoms]);
     closeDialog();
   };
 
   const openGeneralDialog = () => {
+    startLogTimer('symptom'); // time from opening the form to a successful save
     setGeneralName('');
     setGeneralSeverity(5);
     setGeneralNotes('');
@@ -320,6 +324,7 @@ export function BodyMapNew() {
       entry.id = created.id;
     } catch {}
     setSavingSymptom(false);
+    trackLogCompleted('symptom', { surface: 'general', method: nlpParsed ? 'voice' : 'manual', severity: generalSeverity });
     setSymptoms([entry, ...symptoms]);
     closeGeneralDialog();
   };

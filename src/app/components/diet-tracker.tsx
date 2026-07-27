@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { diet as dietApi, insights as insightsApi, type ParsedLog } from '../../lib/api';
+import { startLogTimer, trackLogCompleted } from '../../lib/analytics';
 import { useAuth } from '../../context/auth-context';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -118,6 +119,7 @@ export function DietTracker() {
       setFlaggedFoods([...flaggedFoods, newEntry.name]);
     }
 
+    trackLogCompleted('diet', { method: lastParsed ? 'voice' : 'manual' });
     setNewEntry({
       name: '',
       category: 'Breakfast',
@@ -212,7 +214,7 @@ export function DietTracker() {
                 Log meals and track food reactions
               </p>
             </div>
-            <Button onClick={() => setShowAddForm(!showAddForm)}>
+            <Button onClick={() => { const next = !showAddForm; setShowAddForm(next); if (next) startLogTimer('diet'); }}>
               <Plus className="h-4 w-4 mr-2" />
               Add Food
             </Button>
