@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { symptoms as symptomsApi, nlp, type ParsedLog } from '../../lib/api';
 import { startLogTimer, trackLogCompleted } from '../../lib/analytics';
+import { useAuth } from '../../context/auth-context';
 import { useWhisper } from '../../hooks/useWhisper';
 import { DetectedExtras } from './detected-extras';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -85,9 +86,27 @@ function isNoiseTranscript(text: string): boolean {
   return norm.length === 0 || WHISPER_NOISE.has(norm);
 }
 
+/** Local YYYY-MM-DD key for a date (used to compare/group by day). */
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Stable identity for "the same symptom" across days (body part + symptom names). */
+function symptomKey(s: { part: string | null; partName: string; symptoms: string[] }): string {
+  const names = [...s.symptoms].map((x) => x.toLowerCase().trim()).filter(Boolean).sort().join(',');
+  return `${s.part ?? 'general'}::${names || s.partName.toLowerCase().trim()}`;
+}
+
 export function BodyMapNew() {
+  const { user } = useAuth();
   const [selectedView, setSelectedView] = useState<ViewType>('front');
   const [symptoms, setSymptoms] = useState<BodyPartSymptom[]>([]);
+  // Symptoms the user has confirmed are no longer present (so we stop asking to
+  // carry them forward). Kept per-device in localStorage: { symptomKey: 'YYYY-MM-DD' }.
+  const resolvedStoreKey = `flaire_sym_resolved_${user?.id ?? 'anon'}`;
+  const [resolved, setResolved] = useState<Record<string, string>>({});
+  // Per-candidate severity chosen in the carry-forward banner (defaults to last).
+  const [carrySeverity, setCarrySeverity] = useState<Record<string, number>>({});
 
   useEffect(() => {
     symptomsApi.list().then((list) => {
@@ -104,6 +123,22 @@ export function BodyMapNew() {
       );
     }).catch(() => {});
   }, []);
+
+  // Load the "resolved" markers for this user.
+  useEffect(() => {
+    try {
+      setResolved(JSON.parse(localStorage.getItem(resolvedStoreKey) || '{}'));
+    } catch {
+      setResolved({});
+    }
+  }, [resolvedStoreKey]);
+
+  const persistResolved = (next: Record<string, string>) => {
+    setResolved(next);
+    try {
+      localStorage.setItem(resolvedStoreKey, JSON.stringify(next));
+    } catch {}
+  };
 
   // Dialog state for adding a symptom to a clicked body part
   const [activeHotspot, setActiveHotspot] = useState<Hotspot | null>(null);
@@ -219,6 +254,72 @@ export function BodyMapNew() {
   const removeSymptom = (id: string) => {
     symptomsApi.remove(id).catch(() => {});
     setSymptoms(symptoms.filter((s) => s.id !== id));
+  };
+
+  // Symptoms that were logged on an earlier day and not yet updated today, and
+  // that the user hasn't marked resolved. We ask (via a banner) whether they're
+  // still ongoing so each active day gets counted.
+  const todayKey = dateKey(new Date());
+  const carryCandidates = (() => {
+    const byKey = new Map<string, BodyPartSymptom[]>();
+    for (const s of symptoms) {
+      const k = symptomKey(s);
+      const arr = byKey.get(k);
+      if (arr) arr.push(s);
+      else byKey.set(k, [s]);
+    }
+    const out: { key: string; latest: BodyPartSymptom; since: Date }[] = [];
+    byKey.forEach((recs, k) => {
+      recs.sort((a, b) => +b.date - +a.date);
+      const latest = recs[0];
+      const loggedToday = recs.some((r) => dateKey(r.date) === todayKey);
+      const resolvedOn = resolved[k];
+      const isResolved = resolvedOn != null && resolvedOn >= dateKey(latest.date);
+      if (!loggedToday && dateKey(latest.date) < todayKey && !isResolved) {
+        out.push({ key: k, latest, since: recs[recs.length - 1].date });
+      }
+    });
+    return out.sort((a, b) => +b.latest.date - +a.latest.date);
+  })();
+
+  const carrySeverityFor = (c: { key: string; latest: BodyPartSymptom }) =>
+    carrySeverity[c.key] ?? c.latest.severity;
+
+  // "Yes, still ongoing" → log it for today with the chosen severity.
+  const confirmPersistent = async (c: { key: string; latest: BodyPartSymptom }) => {
+    const sev = carrySeverityFor(c);
+    const entry: BodyPartSymptom = {
+      id: Date.now().toString(),
+      part: c.latest.part,
+      partName: c.latest.partName,
+      symptoms: c.latest.symptoms,
+      severity: sev,
+      notes: c.latest.notes,
+      date: new Date(),
+    };
+    try {
+      const created = await symptomsApi.create({
+        bodyPart: c.latest.part,
+        bodyPartName: c.latest.part === null ? null : c.latest.partName,
+        symptoms: c.latest.symptoms,
+        severity: sev,
+        notes: c.latest.notes || undefined,
+        view: c.latest.part === null ? null : selectedView,
+      });
+      entry.id = created.id;
+    } catch {}
+    setSymptoms((prev) => [entry, ...prev]);
+    // No longer resolved (it's active again today).
+    if (resolved[c.key]) {
+      const next = { ...resolved };
+      delete next[c.key];
+      persistResolved(next);
+    }
+  };
+
+  // "No, it's gone" → stop carrying it forward; earlier days stay as history.
+  const markResolved = (c: { key: string }) => {
+    persistResolved({ ...resolved, [c.key]: todayKey });
   };
 
   const openEdit = (symptom: BodyPartSymptom) => {
@@ -505,20 +606,70 @@ export function BodyMapNew() {
           <div className="flex-1 space-y-4">
             <div>
               <div className="flex items-center justify-between mb-3 gap-2">
-                <h4>Active Symptoms</h4>
+                <h4>Symptoms</h4>
                 <Button size="sm" variant="outline" onClick={openGeneralDialog}>
                   <Sparkles className="h-4 w-4 mr-1" />
                   Log other symptom
                 </Button>
               </div>
+
+              {/* Ongoing symptoms from earlier days awaiting confirmation */}
+              {carryCandidates.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {carryCandidates.map((c) => {
+                    const label = c.latest.symptoms.join(', ');
+                    return (
+                      <div
+                        key={c.key}
+                        className="p-3 rounded-lg border border-[#B48CBF] bg-[#F5F0F6] space-y-2"
+                      >
+                        <p className="text-sm text-[#7A5A85]">
+                          {user?.firstName ? `Hi ${user.firstName}, you` : 'You'} logged{' '}
+                          <strong>{label}</strong>
+                          {c.latest.part !== null ? ` (${c.latest.partName})` : ''} on{' '}
+                          {c.latest.date.toLocaleDateString()} and haven't updated it today. Is it
+                          still ongoing?
+                        </p>
+                        <div className="space-y-1">
+                          <span className="text-xs text-muted-foreground">
+                            Today's severity: {carrySeverityFor(c)}/10
+                          </span>
+                          <Slider
+                            value={[carrySeverityFor(c)]}
+                            onValueChange={(v) =>
+                              setCarrySeverity((prev) => ({ ...prev, [c.key]: v[0] }))
+                            }
+                            min={1}
+                            max={10}
+                            step={1}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            style={{ backgroundColor: '#7293BB' }}
+                            onClick={() => confirmPersistent(c)}
+                          >
+                            Yes, still have it
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => markResolved(c)}>
+                            No, it's gone
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {symptoms.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No symptoms logged. Click a body part on the skeleton, or use
+                  No symptoms logged yet. Click a body part on the skeleton, or use
                   "Log other symptom" for things like fatigue.
                 </p>
               ) : (
                 <div className="space-y-3">
-                  {symptoms.map((symptom) => (
+                  {[...symptoms].sort((a, b) => +b.date - +a.date).map((symptom) => (
                     <div
                       key={symptom.id}
                       className="p-3 bg-card rounded-lg border flex items-start justify-between"
@@ -566,7 +717,9 @@ export function BodyMapNew() {
                           </p>
                         )}
                         <p className="text-xs text-muted-foreground">
-                          {symptom.date.toLocaleDateString()}
+                          {dateKey(symptom.date) === todayKey
+                            ? 'Today'
+                            : symptom.date.toLocaleDateString()}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
