@@ -621,6 +621,9 @@ export function MedicationManager() {
           ) : (
             medications.map((med, index) => {
               const status = getCompletionStatus(med);
+              // "As needed" meds are situational — logged when taken, never a
+              // required daily dose. We list them but don't show dose tracking.
+              const asNeeded = med.frequency.trim().toLowerCase() === 'as needed';
               return (
                 <motion.div
                   key={med.id}
@@ -688,43 +691,52 @@ export function MedicationManager() {
                         </div>
                       )}
 
-                      <div className="space-y-2">
-                        {med.time.map((time, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-center justify-between p-2 bg-muted/30 rounded"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm">{time}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Checkbox
-                                checked={med.taken[idx]}
-                                onCheckedChange={() => toggleTaken(med.id, idx)}
-                              />
-                              {med.taken[idx] && (
-                                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-muted rounded-full h-2">
-                          <div
-                            className="h-2 rounded-full transition-all"
-                            style={{
-                              width: `${status.percentage}%`,
-                              backgroundColor: '#7293BB',
-                            }}
-                          />
+                      {asNeeded ? (
+                        <div className="flex items-start gap-2 p-2 bg-muted/40 rounded text-sm text-muted-foreground">
+                          <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                          <span>Taken only when needed — not a tracked daily dose. Logs still appear on your calendar and summary.</span>
                         </div>
-                        <span className="text-xs text-muted-foreground">
-                          {status.taken}/{status.total}
-                        </span>
-                      </div>
+                      ) : (
+                        <>
+                          <div className="space-y-2">
+                            {med.time.map((time, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center justify-between p-2 bg-muted/30 rounded"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Clock className="h-4 w-4 text-muted-foreground" />
+                                  <span className="text-sm">{time}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Checkbox
+                                    checked={med.taken[idx]}
+                                    onCheckedChange={() => toggleTaken(med.id, idx)}
+                                  />
+                                  {med.taken[idx] && (
+                                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 bg-muted rounded-full h-2">
+                              <div
+                                className="h-2 rounded-full transition-all"
+                                style={{
+                                  width: `${status.percentage}%`,
+                                  backgroundColor: '#7293BB',
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {status.taken}/{status.total}
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </motion.div>

@@ -65,7 +65,7 @@ const doseId = (medId: string, date: string, timeIndex: number) =>
 medicationsRouter.get('/today', async (req, res, next) => {
   try {
     const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
-    const meds = sb(
+    const allMeds = sb(
       await supabase
         .from('Medication')
         .select()
@@ -73,6 +73,12 @@ medicationsRouter.get('/today', async (req, res, next) => {
         .eq('active', true)
         .order('createdAt', { ascending: false })
     ) as any[];
+
+    // "As needed" (PRN) meds are situational, not a required daily dose — they
+    // must not appear in the dashboard's "X of Y doses taken today" count.
+    const meds = allMeds.filter(
+      (m) => String(m.frequency ?? '').toLowerCase() !== 'as needed'
+    );
 
     // Expected dose ids for every scheduled time today
     const expected: string[] = [];

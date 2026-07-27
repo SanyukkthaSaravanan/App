@@ -154,6 +154,8 @@ export function HealthCalendar() {
     const dayStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
     const dayEnd = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 23, 59, 59, 999);
     return meds.reduce((a, m) => {
+      // As-needed meds aren't required doses, so they can't be "missed".
+      if (String(m.frequency ?? '').toLowerCase() === 'as needed') return a;
       const started = m.startDate ? new Date(m.startDate) <= dayEnd : true;
       const notEnded = m.endDate ? new Date(m.endDate) >= dayStart : true;
       const times = Array.isArray(m.scheduleTimes) ? m.scheduleTimes.length : 0;

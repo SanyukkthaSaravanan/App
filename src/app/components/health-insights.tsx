@@ -196,21 +196,37 @@ function buildTopSymptoms(period: TimePeriod, symptoms: any[]) {
 }
 
 // Medication adherence per bucket = doses taken ÷ doses expected (× 100).
+// A med only contributes expected doses for days on/after its startDate (and
+// on/before any endDate) — a medication added later never existed for the
+// earlier dates, so it must not drag those buckets' adherence down. Buckets
+// with no scheduled med active return null (no data), not a misleading 0%.
 function buildAdherence(period: TimePeriod, meds: any[], allDoses: any[][]) {
   const buckets = generateBuckets(period);
-  const perDayDoses = meds.reduce(
-    (a, m) => a + (Array.isArray(m.scheduleTimes) && m.scheduleTimes.length ? m.scheduleTimes.length : 1),
-    0
-  );
+  const dayMs = 86400000;
   const takenTimes = allDoses
     .flat()
     .filter((d) => d.takenAt)
     .map((d) => +new Date(d.takenAt));
+
+  // Whole days in [b.start, b.end] during which the med was active.
+  const activeDays = (m: any, b: Bucket) => {
+    const medStart = m.startDate ? new Date(m.startDate).setHours(0, 0, 0, 0) : b.start;
+    const medEnd = m.endDate ? new Date(m.endDate).setHours(23, 59, 59, 999) : Date.now();
+    const from = Math.max(medStart, b.start);
+    const to = Math.min(medEnd, b.end);
+    return to <= from ? 0 : Math.round((to - from) / dayMs);
+  };
+
   return buckets.map((b) => {
-    const days = Math.max(1, Math.round((b.end - b.start) / 86400000));
-    const expected = perDayDoses * days;
+    const expected = meds.reduce((a, m) => {
+      // As-needed (PRN) meds have no required schedule — they don't count
+      // toward adherence.
+      if (String(m.frequency ?? '').toLowerCase() === 'as needed') return a;
+      const perDay = Array.isArray(m.scheduleTimes) && m.scheduleTimes.length ? m.scheduleTimes.length : 1;
+      return a + perDay * activeDays(m, b);
+    }, 0);
     const taken = takenTimes.filter((t) => t >= b.start && t <= b.end).length;
-    const adherence = expected > 0 ? Math.min(100, Math.round((taken / expected) * 100)) : 0;
+    const adherence = expected > 0 ? Math.min(100, Math.round((taken / expected) * 100)) : null;
     return { period: b.label, adherence };
   });
 }
@@ -234,7 +250,7 @@ export function HealthInsights() {
   const [chartData, setChartData] = useState<Record<string, number | string>[]>([]);
   // Real bar/line data derived from logged symptoms + medication doses.
   const [triggerData, setTriggerData] = useState<{ trigger: string; count: number }[]>([]);
-  const [medicationAdherence, setMedicationAdherence] = useState<{ period: string; adherence: number }[]>([]);
+  const [medicationAdherence, setMedicationAdherence] = useState<{ period: string; adherence: number | null }[]>([]);
 
   // Doctor-ready summary
   const [doctorSummary, setDoctorSummary] = useState<DoctorSummary | null>(null);
@@ -653,7 +669,7 @@ export function HealthInsights() {
             <p className="text-sm text-muted-foreground">Doses taken vs. scheduled</p>
           </CardHeader>
           <CardContent>
-            {medicationAdherence.every((d) => d.adherence === 0) ? (
+            {medicationAdherence.every((d) => !d.adherence) ? (
               <div className="py-12 text-center text-sm text-muted-foreground">
                 No medication doses recorded yet. Mark doses as taken to track adherence.
               </div>
