@@ -4,6 +4,7 @@ import {
   insights as insightsApi,
   checkins as checkinsApi,
   symptoms as symptomsApi,
+  medications as medsApi,
   type HealthAnalysis,
   type DoctorSummary,
 } from '../../lib/api';
@@ -82,85 +83,6 @@ const symptomDataByPeriod = {
     { date: '2023-01-05', severity: 5, fatigue: 4, pain: 6 },
     { date: '2023-01-06', severity: 4, fatigue: 3, pain: 5 },
     { date: '2023-01-07', severity: 3, fatigue: 2, pain: 4 },
-  ],
-};
-
-const triggerDataByPeriod = {
-  days: [
-    { trigger: 'Stress', count: 5 },
-    { trigger: 'Weather', count: 3 },
-    { trigger: 'Diet', count: 2 },
-    { trigger: 'Sleep', count: 2 },
-    { trigger: 'Exercise', count: 1 },
-  ],
-  weeks: [
-    { trigger: 'Stress', count: 8 },
-    { trigger: 'Weather', count: 6 },
-    { trigger: 'Diet', count: 5 },
-    { trigger: 'Sleep', count: 4 },
-    { trigger: 'Exercise', count: 3 },
-  ],
-  months: [
-    { trigger: 'Stress', count: 24 },
-    { trigger: 'Weather', count: 18 },
-    { trigger: 'Diet', count: 15 },
-    { trigger: 'Sleep', count: 12 },
-    { trigger: 'Exercise', count: 10 },
-  ],
-  years: [
-    { trigger: 'Stress', count: 180 },
-    { trigger: 'Weather', count: 120 },
-    { trigger: 'Diet', count: 95 },
-    { trigger: 'Sleep', count: 85 },
-    { trigger: 'Exercise', count: 60 },
-  ],
-  custom: [
-    { trigger: 'Stress', count: 5 },
-    { trigger: 'Weather', count: 3 },
-    { trigger: 'Diet', count: 2 },
-    { trigger: 'Sleep', count: 2 },
-    { trigger: 'Exercise', count: 1 },
-  ],
-};
-
-const medicationAdherenceByPeriod = {
-  days: [
-    { period: 'Mon', adherence: 100 },
-    { period: 'Tue', adherence: 75 },
-    { period: 'Wed', adherence: 100 },
-    { period: 'Thu', adherence: 100 },
-    { period: 'Fri', adherence: 50 },
-    { period: 'Sat', adherence: 100 },
-    { period: 'Sun', adherence: 100 },
-  ],
-  weeks: [
-    { period: 'Week 1', adherence: 85 },
-    { period: 'Week 2', adherence: 90 },
-    { period: 'Week 3', adherence: 75 },
-    { period: 'Week 4', adherence: 95 },
-  ],
-  months: [
-    { period: 'Jan', adherence: 82 },
-    { period: 'Feb', adherence: 88 },
-    { period: 'Mar', adherence: 91 },
-    { period: 'Apr', adherence: 85 },
-    { period: 'May', adherence: 93 },
-    { period: 'Jun', adherence: 89 },
-  ],
-  years: [
-    { period: '2022', adherence: 78 },
-    { period: '2023', adherence: 85 },
-    { period: '2024', adherence: 88 },
-    { period: '2025', adherence: 92 },
-  ],
-  custom: [
-    { period: '2023-01-01', adherence: 100 },
-    { period: '2023-01-02', adherence: 75 },
-    { period: '2023-01-03', adherence: 100 },
-    { period: '2023-01-04', adherence: 100 },
-    { period: '2023-01-05', adherence: 50 },
-    { period: '2023-01-06', adherence: 100 },
-    { period: '2023-01-07', adherence: 100 },
   ],
 };
 
@@ -247,6 +169,49 @@ function buildChartData(period: TimePeriod, checkins: any[], symptoms: any[], la
   });
 }
 
+// Most frequently logged symptoms in the period — a plain count from the data.
+function buildTopSymptoms(period: TimePeriod, symptoms: any[]) {
+  const buckets = generateBuckets(period);
+  if (buckets.length === 0) return [] as { trigger: string; count: number }[];
+  const start = buckets[0].start;
+  const end = buckets[buckets.length - 1].end;
+  const counts = new Map<string, number>();
+  symptoms.forEach((s) => {
+    const t = +new Date(s.loggedAt);
+    if (t < start || t > end) return;
+    (Array.isArray(s.symptoms) ? s.symptoms : []).forEach((n: any) => {
+      const raw = String(n).trim();
+      if (!raw) return;
+      const name = raw.charAt(0).toUpperCase() + raw.slice(1);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    });
+  });
+  return [...counts.entries()]
+    .map(([trigger, count]) => ({ trigger, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+}
+
+// Medication adherence per bucket = doses taken ÷ doses expected (× 100).
+function buildAdherence(period: TimePeriod, meds: any[], allDoses: any[][]) {
+  const buckets = generateBuckets(period);
+  const perDayDoses = meds.reduce(
+    (a, m) => a + (Array.isArray(m.scheduleTimes) && m.scheduleTimes.length ? m.scheduleTimes.length : 1),
+    0
+  );
+  const takenTimes = allDoses
+    .flat()
+    .filter((d) => d.takenAt)
+    .map((d) => +new Date(d.takenAt));
+  return buckets.map((b) => {
+    const days = Math.max(1, Math.round((b.end - b.start) / 86400000));
+    const expected = perDayDoses * days;
+    const taken = takenTimes.filter((t) => t >= b.start && t <= b.end).length;
+    const adherence = expected > 0 ? Math.min(100, Math.round((taken / expected) * 100)) : 0;
+    return { period: b.label, adherence };
+  });
+}
+
 export function HealthInsights() {
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('days');
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined }>({
@@ -264,6 +229,9 @@ export function HealthInsights() {
       ? user.trackedFactors
       : ['Pain', 'Fatigue / Energy'];
   const [chartData, setChartData] = useState<Record<string, number | string>[]>([]);
+  // Real bar/line data derived from logged symptoms + medication doses.
+  const [triggerData, setTriggerData] = useState<{ trigger: string; count: number }[]>([]);
+  const [medicationAdherence, setMedicationAdherence] = useState<{ period: string; adherence: number }[]>([]);
 
   // Doctor-ready summary
   const [doctorSummary, setDoctorSummary] = useState<DoctorSummary | null>(null);
@@ -313,8 +281,15 @@ export function HealthInsights() {
     Promise.all([
       checkinsApi.list(from.toISOString(), new Date().toISOString()).catch(() => []),
       symptomsApi.list().catch(() => []),
-    ]).then(([cks, syms]) => {
+      medsApi.list().catch(() => [] as any[]),
+    ]).then(async ([cks, syms, meds]) => {
       setChartData(buildChartData(period, cks, syms, trackedLabels));
+      setTriggerData(buildTopSymptoms(period, syms));
+      // Pull each medication's dose history, then compute adherence per bucket.
+      const doseLists = await Promise.all(
+        (meds as any[]).map((m) => medsApi.doses(m.id).catch(() => [] as any[]))
+      );
+      setMedicationAdherence(buildAdherence(period, meds as any[], doseLists));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timePeriod, user?.trackedFactors]);
@@ -334,8 +309,6 @@ export function HealthInsights() {
   const hasChartData = chartData.some((pt) =>
     trackedLabels.some((l) => typeof pt[l] === 'number' && (pt[l] as number) > 0)
   );
-  const triggerData = triggerDataByPeriod[timePeriod];
-  const medicationAdherence = medicationAdherenceByPeriod[timePeriod];
 
   const handleApplyCustomRange = () => {
     if (dateRange.from && dateRange.to) {
@@ -643,24 +616,30 @@ export function HealthInsights() {
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Triggers */}
+        {/* Most frequent symptoms */}
         <Card>
           <CardHeader>
-            <CardTitle>Top Symptom Triggers</CardTitle>
+            <CardTitle>Most Frequent Symptoms</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Based on your logged data
+              How often each symptom was logged
             </p>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart id="triggers-bar-chart" data={triggerData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" key="triggers-grid" />
-                <XAxis type="number" key="triggers-xaxis" />
-                <YAxis dataKey="trigger" type="category" width={80} key="triggers-yaxis" />
-                <Tooltip key="triggers-tooltip" />
-                <Bar dataKey="count" fill="#7293BB" radius={[0, 8, 8, 0]} key="triggers-bar" />
-              </BarChart>
-            </ResponsiveContainer>
+            {triggerData.length === 0 ? (
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                No symptoms logged in this period yet.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart id="triggers-bar-chart" data={triggerData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" key="triggers-grid" />
+                  <XAxis type="number" allowDecimals={false} key="triggers-xaxis" />
+                  <YAxis dataKey="trigger" type="category" width={90} key="triggers-yaxis" />
+                  <Tooltip key="triggers-tooltip" />
+                  <Bar dataKey="count" fill="#7293BB" radius={[0, 8, 8, 0]} key="triggers-bar" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
@@ -668,26 +647,32 @@ export function HealthInsights() {
         <Card>
           <CardHeader>
             <CardTitle>Medication Adherence</CardTitle>
-            <p className="text-sm text-muted-foreground">Weekly tracking</p>
+            <p className="text-sm text-muted-foreground">Doses taken vs. scheduled</p>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart id="adherence-line-chart" data={medicationAdherence}>
-                <CartesianGrid strokeDasharray="3 3" key="adherence-grid" />
-                <XAxis dataKey="period" key="adherence-xaxis" />
-                <YAxis domain={[0, 100]} key="adherence-yaxis" />
-                <Tooltip key="adherence-tooltip" />
-                <Line
-                  type="monotone"
-                  dataKey="adherence"
-                  stroke="#A5D3CF"
-                  strokeWidth={3}
-                  dot={{ fill: '#A5D3CF', r: 6 }}
-                  name="Adherence %"
-                  key="adherence-line"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {medicationAdherence.every((d) => d.adherence === 0) ? (
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                No medication doses recorded yet. Mark doses as taken to track adherence.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={250}>
+                <LineChart id="adherence-line-chart" data={medicationAdherence}>
+                  <CartesianGrid strokeDasharray="3 3" key="adherence-grid" />
+                  <XAxis dataKey="period" key="adherence-xaxis" />
+                  <YAxis domain={[0, 100]} key="adherence-yaxis" />
+                  <Tooltip key="adherence-tooltip" />
+                  <Line
+                    type="monotone"
+                    dataKey="adherence"
+                    stroke="#A5D3CF"
+                    strokeWidth={3}
+                    dot={{ fill: '#A5D3CF', r: 6 }}
+                    name="Adherence %"
+                    key="adherence-line"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -7,8 +7,16 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
-import { Plus, Pill, Clock, AlertCircle, CheckCircle2, ScanLine } from 'lucide-react';
+import { Plus, Pill, Clock, AlertCircle, CheckCircle2, ScanLine, Pencil, Trash2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Textarea } from './ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from './ui/dialog';
 import { VoiceLogInput } from './voice-log-input';
 import { DetectedExtras } from './detected-extras';
 
@@ -78,6 +86,17 @@ export function MedicationManager() {
     time: '',
     notes: '',
   });
+
+  // Editing an existing medication (name / dosage / frequency / times / notes).
+  const [editingMed, setEditingMed] = useState<Medication | null>(null);
+  const [editMed, setEditMed] = useState({
+    name: '',
+    dosage: '',
+    frequency: 'Daily',
+    time: '',
+    notes: '',
+  });
+  const [savingMedEdit, setSavingMedEdit] = useState(false);
 
   const addMedication = async () => {
     if (!newMed.name || !newMed.dosage) return;
@@ -158,7 +177,61 @@ export function MedicationManager() {
   const getCompletionStatus = (med: Medication) => {
     const taken = med.taken.filter((t) => t).length;
     const total = med.taken.length;
-    return { taken, total, percentage: (taken / total) * 100 };
+    return { taken, total, percentage: total ? (taken / total) * 100 : 0 };
+  };
+
+  const openEditMed = (med: Medication) => {
+    setEditingMed(med);
+    setEditMed({
+      name: med.name,
+      dosage: med.dosage,
+      frequency: med.frequency,
+      time: med.time.join(', '),
+      notes: med.notes ?? '',
+    });
+  };
+
+  const saveMedEdit = async () => {
+    if (!editingMed || !editMed.name.trim() || savingMedEdit) return;
+    setSavingMedEdit(true);
+    const scheduleTimes = editMed.time.split(',').map((t) => t.trim()).filter(Boolean);
+    try {
+      await medsApi.update(editingMed.id, {
+        name: editMed.name.trim(),
+        dosage: editMed.dosage.trim(),
+        frequency: editMed.frequency,
+        scheduleTimes,
+        notes: editMed.notes.trim(),
+      });
+    } catch {}
+    setMedications(
+      medications.map((m) =>
+        m.id === editingMed.id
+          ? {
+              ...m,
+              name: editMed.name.trim(),
+              dosage: editMed.dosage.trim(),
+              frequency: editMed.frequency,
+              time: scheduleTimes,
+              // Preserve taken flags where the schedule length is unchanged;
+              // otherwise reset to match the new number of times.
+              taken:
+                scheduleTimes.length === m.taken.length
+                  ? m.taken
+                  : scheduleTimes.map(() => false),
+              notes: editMed.notes.trim(),
+            }
+          : m
+      )
+    );
+    setSavingMedEdit(false);
+    setEditingMed(null);
+  };
+
+  const deleteMed = (med: Medication) => {
+    medsApi.remove(med.id).catch(() => {});
+    setMedications(medications.filter((m) => m.id !== med.id));
+    if (editingMed?.id === med.id) setEditingMed(null);
   };
 
   // Voice note processed → fill the medication form from the first medication
@@ -315,7 +388,11 @@ export function MedicationManager() {
               hint='e.g. "Started hydroxychloroquine 200mg, take with breakfast"'
               onParsed={handleMedVoiceParsed}
             />
-            <DetectedExtras parsed={lastParsed} show={['symptoms', 'diet']} />
+            <DetectedExtras
+              parsed={lastParsed}
+              show={['symptoms', 'diet']}
+              auto={['symptoms']}
+            />
 
             {/* Scan Input Option — desktop Python OCR scanner */}
             <div className="p-3 rounded-lg" style={{ backgroundColor: '#F2EEDA' }}>
@@ -575,7 +652,27 @@ export function MedicationManager() {
                               </Badge>
                             )}
                           </div>
-                          <Badge variant="outline">{med.frequency}</Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge variant="outline">{med.frequency}</Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0"
+                              onClick={() => openEditMed(med)}
+                              aria-label="Edit medication"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                              onClick={() => deleteMed(med)}
+                              aria-label="Delete medication"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {med.dosage}
@@ -637,6 +734,95 @@ export function MedicationManager() {
         </div>
       </CardContent>
     </Card>
+
+    {/* Edit medication */}
+    <Dialog
+      open={editingMed !== null}
+      onOpenChange={(open) => {
+        if (!open) setEditingMed(null);
+      }}
+    >
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>Edit medication</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label htmlFor="edit-med-name">Name</Label>
+            <Input
+              id="edit-med-name"
+              value={editMed.name}
+              onChange={(e) => setEditMed({ ...editMed, name: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="edit-med-dosage">Dosage</Label>
+              <Input
+                id="edit-med-dosage"
+                value={editMed.dosage}
+                onChange={(e) => setEditMed({ ...editMed, dosage: e.target.value })}
+                placeholder="e.g. 200mg"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-med-freq">Frequency</Label>
+              <Select
+                value={editMed.frequency}
+                onValueChange={(v) => setEditMed({ ...editMed, frequency: v })}
+              >
+                <SelectTrigger id="edit-med-freq">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Daily">Daily</SelectItem>
+                  <SelectItem value="Twice Daily">Twice Daily</SelectItem>
+                  <SelectItem value="Weekly">Weekly</SelectItem>
+                  <SelectItem value="As Needed">As Needed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-med-time">Times (comma separated)</Label>
+            <Input
+              id="edit-med-time"
+              value={editMed.time}
+              onChange={(e) => setEditMed({ ...editMed, time: e.target.value })}
+              placeholder="e.g. 08:00, 20:00"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-med-notes">Notes (optional)</Label>
+            <Textarea
+              id="edit-med-notes"
+              rows={2}
+              value={editMed.notes}
+              onChange={(e) => setEditMed({ ...editMed, notes: e.target.value })}
+            />
+          </div>
+        </div>
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          <Button
+            variant="ghost"
+            className="text-red-600 hover:text-red-700 sm:mr-auto"
+            onClick={() => editingMed && deleteMed(editingMed)}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </Button>
+          <Button variant="outline" onClick={() => setEditingMed(null)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={saveMedEdit}
+            disabled={!editMed.name.trim() || savingMedEdit}
+          >
+            {savingMedEdit ? 'Saving…' : 'Save changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </motion.div>
   );
 }

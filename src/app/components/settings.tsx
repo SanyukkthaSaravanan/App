@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -31,6 +31,17 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+
+  // The user object can arrive after this component mounts (async /me), and it
+  // carries the persisted preferences (merged with the local backstop). Sync
+  // once per user so previously-saved choices stay checked off like a real app.
+  useEffect(() => {
+    if (!user) return;
+    setCondition(user.condition ?? '');
+    setFactors(user.trackedFactors ?? []);
+    setTriggers(user.knownTriggers ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // Factors to show = base set plus any custom ones the user already has.
   const allFactors = Array.from(new Set([...BASE_FACTORS, ...factors]));

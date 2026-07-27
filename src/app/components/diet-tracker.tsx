@@ -37,17 +37,26 @@ export function DietTracker() {
   const { user, completeOnboarding } = useAuth();
 
   useEffect(() => {
+    // Only today's entries show on screen (the log refreshes each new day);
+    // every entry is still stored and appears on the calendar.
+    const now = new Date();
+    const isToday = (iso: string) => {
+      const d = new Date(iso);
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    };
     dietApi.list().then((list) => {
       setEntries(
-        list.map((d) => ({
-          id: d.id,
-          name: d.foods.join(', '),
-          category: d.mealType as any,
-          time: new Date(d.ateAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-          reaction: d.triggers.length ? 'negative' : 'neutral',
-          notes: d.notes ?? '',
-          date: new Date(d.ateAt),
-        }))
+        list
+          .filter((d) => isToday(d.ateAt))
+          .map((d) => ({
+            id: d.id,
+            name: d.foods.join(', '),
+            category: d.mealType as any,
+            time: new Date(d.ateAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+            reaction: d.triggers.length ? 'negative' : 'neutral',
+            notes: d.notes ?? '',
+            date: new Date(d.ateAt),
+          }))
       );
     }).catch(() => {});
 
@@ -218,8 +227,14 @@ export function DietTracker() {
                 onParsed={handleVoiceParsed}
               />
 
-              {/* Cross-category items detected in the voice note */}
-              <DetectedExtras parsed={lastParsed} show={['symptoms', 'medications']} />
+              {/* Cross-category items detected in the voice note. Symptoms are
+                  recorded on the Symptoms page automatically; meds need a tap. */}
+              <DetectedExtras
+                parsed={lastParsed}
+                show={['symptoms', 'medications']}
+                auto={['symptoms']}
+                title="Also detected in your note"
+              />
 
               <div className="relative">
                 <div className="absolute inset-0 flex items-center" aria-hidden="true">

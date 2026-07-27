@@ -17,7 +17,7 @@ import { Slider } from './ui/slider';
 import { Textarea } from './ui/textarea';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { X, Plus, Mic, MicOff, Sparkles } from 'lucide-react';
+import { X, Plus, Mic, MicOff, Sparkles, Pencil } from 'lucide-react';
 import skeletonFront from 'figma:asset/skeleton-front.png';
 import skeletonSide from 'figma:asset/skeleton-side.png';
 
@@ -111,6 +111,14 @@ export function BodyMapNew() {
   const isProcessing = whisper.state === 'processing';
   // Cross-category items (meds/food) detected in a symptom voice note.
   const [crossParsed, setCrossParsed] = useState<ParsedLog | null>(null);
+  // Guards against double-clicking Save (accidental duplicate symptom logs).
+  const [savingSymptom, setSavingSymptom] = useState(false);
+  // Editing an existing logged symptom (any symptom can be edited).
+  const [editing, setEditing] = useState<BodyPartSymptom | null>(null);
+  const [editSymptomsText, setEditSymptomsText] = useState('');
+  const [editSeverity, setEditSeverity] = useState(5);
+  const [editNotes, setEditNotes] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Front view hotspots
   const frontHotspots: Hotspot[] = [
@@ -185,6 +193,42 @@ export function BodyMapNew() {
     setSymptoms(symptoms.filter((s) => s.id !== id));
   };
 
+  const openEdit = (symptom: BodyPartSymptom) => {
+    setEditing(symptom);
+    setEditSymptomsText(symptom.symptoms.join(', '));
+    setEditSeverity(symptom.severity);
+    setEditNotes(symptom.notes ?? '');
+  };
+
+  const saveEdit = async () => {
+    if (!editing || savingEdit) return;
+    const list = editSymptomsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (list.length === 0) return;
+    setSavingEdit(true);
+    const updated: BodyPartSymptom = {
+      ...editing,
+      symptoms: list,
+      // Keep the label in step with the symptom for general entries.
+      partName: editing.part === null ? list[0] : editing.partName,
+      severity: editSeverity,
+      notes: editNotes.trim(),
+    };
+    try {
+      await symptomsApi.update(editing.id, {
+        symptoms: list,
+        severity: editSeverity,
+        notes: editNotes.trim(),
+        ...(editing.part === null ? { bodyPartName: null } : {}),
+      });
+    } catch {}
+    setSavingEdit(false);
+    setSymptoms(symptoms.map((s) => (s.id === editing.id ? updated : s)));
+    setEditing(null);
+  };
+
   const openHotspot = (hotspot: Hotspot) => {
     // Pre-fill with the most recent existing entry for this part, if any
     const existing = getPartSymptoms(hotspot.id)[0];
@@ -208,7 +252,8 @@ export function BodyMapNew() {
   };
 
   const saveSymptom = async () => {
-    if (!activeHotspot || draftSymptoms.length === 0) return;
+    if (!activeHotspot || draftSymptoms.length === 0 || savingSymptom) return;
+    setSavingSymptom(true);
     const entry: BodyPartSymptom = {
       id: Date.now().toString(),
       part: activeHotspot.id,
@@ -229,6 +274,7 @@ export function BodyMapNew() {
       });
       entry.id = created.id;
     } catch {}
+    setSavingSymptom(false);
     setSymptoms([entry, ...symptoms]);
     closeDialog();
   };
@@ -250,7 +296,8 @@ export function BodyMapNew() {
 
   const saveGeneralSymptom = async () => {
     const name = generalName.trim();
-    if (!name) return;
+    if (!name || savingSymptom) return;
+    setSavingSymptom(true);
     const entry: BodyPartSymptom = {
       id: Date.now().toString(),
       part: null,
@@ -263,13 +310,16 @@ export function BodyMapNew() {
     try {
       const created = await symptomsApi.create({
         bodyPart: null,
-        bodyPartName: 'General',
+        // Store the symptom itself as the label (not a "General" category) so
+        // the calendar and lists show WHAT the symptom is, e.g. "Nausea".
+        bodyPartName: null,
         symptoms: [name],
         severity: generalSeverity,
         notes: generalNotes.trim(),
       });
       entry.id = created.id;
     } catch {}
+    setSavingSymptom(false);
     setSymptoms([entry, ...symptoms]);
     closeGeneralDialog();
   };
@@ -482,13 +532,24 @@ export function BodyMapNew() {
                           {symptom.date.toLocaleDateString()}
                         </p>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeSymptom(symptom.id)}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEdit(symptom)}
+                          aria-label="Edit symptom"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeSymptom(symptom.id)}
+                          aria-label="Delete symptom"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -576,9 +637,9 @@ export function BodyMapNew() {
             </Button>
             <Button
               onClick={saveSymptom}
-              disabled={draftSymptoms.length === 0}
+              disabled={draftSymptoms.length === 0 || savingSymptom}
             >
-              Save Symptom
+              {savingSymptom ? 'Saving…' : 'Save Symptom'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -715,9 +776,67 @@ export function BodyMapNew() {
             </Button>
             <Button
               onClick={saveGeneralSymptom}
-              disabled={!generalName.trim()}
+              disabled={!generalName.trim() || savingSymptom}
             >
-              Save Symptom
+              {savingSymptom ? 'Saving…' : 'Save Symptom'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit any logged symptom */}
+      <Dialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Edit symptom</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-symptoms">Symptom(s)</Label>
+              <Input
+                id="edit-symptoms"
+                value={editSymptomsText}
+                onChange={(e) => setEditSymptomsText(e.target.value)}
+                placeholder="e.g. Nausea, Cramping"
+              />
+              <p className="text-xs text-muted-foreground">
+                Separate multiple symptoms with commas.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Severity: {editSeverity}/10</Label>
+              <Slider
+                value={[editSeverity]}
+                onValueChange={(v) => setEditSeverity(v[0])}
+                min={1}
+                max={10}
+                step={1}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-notes">Notes (optional)</Label>
+              <Textarea
+                id="edit-notes"
+                rows={3}
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={saveEdit}
+              disabled={!editSymptomsText.trim() || savingEdit}
+            >
+              {savingEdit ? 'Saving…' : 'Save changes'}
             </Button>
           </DialogFooter>
         </DialogContent>

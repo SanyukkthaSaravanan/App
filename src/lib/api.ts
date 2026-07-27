@@ -42,9 +42,10 @@ async function request<T>(
   return res.json();
 }
 
-const get  = <T>(path: string) => request<T>('GET', path);
-const post = <T>(path: string, body: unknown) => request<T>('POST', path, body);
-const del  = <T>(path: string) => request<T>('DELETE', path);
+const get   = <T>(path: string) => request<T>('GET', path);
+const post  = <T>(path: string, body: unknown) => request<T>('POST', path, body);
+const patch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body);
+const del   = <T>(path: string) => request<T>('DELETE', path);
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 export interface AuthUser {
@@ -97,6 +98,8 @@ export const symptoms = {
   list: () => get<SymptomEntry[]>('/api/symptoms'),
   create: (data: Omit<SymptomEntry, 'id' | 'loggedAt'> & { loggedAt?: string }) =>
     post<SymptomEntry>('/api/symptoms', data),
+  update: (id: string, data: Partial<Pick<SymptomEntry, 'symptoms' | 'severity' | 'notes' | 'bodyPartName'>>) =>
+    patch<SymptomEntry>(`/api/symptoms/${id}`, data),
   remove: (id: string) => del<void>(`/api/symptoms/${id}`),
 };
 
@@ -180,6 +183,9 @@ export const medications = {
   today: (date: string) => get<MedsToday>(`/api/medications/today?date=${date}`),
   toggleDose: (medId: string, timeIndex: number, taken: boolean, date: string) =>
     post<{ ok: boolean }>(`/api/medications/${medId}/dose`, { timeIndex, taken, date }),
+  update: (id: string, data: Partial<Pick<Medication, 'name' | 'dosage' | 'frequency' | 'scheduleTimes' | 'notes'>>) =>
+    patch<Medication>(`/api/medications/${id}`, data),
+  remove: (id: string) => del<void>(`/api/medications/${id}`),
 };
 
 // ── Check-ins ──────────────────────────────────────────────────────────────────

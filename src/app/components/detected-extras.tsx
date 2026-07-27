@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { Activity, Pill, Apple, Check } from 'lucide-react';
 import {
@@ -8,10 +8,18 @@ import {
   type ParsedLog,
 } from '../../lib/api';
 
+type Category = 'diet' | 'symptoms' | 'medications';
+
 interface DetectedExtrasProps {
   parsed: ParsedLog | null;
   /** Which cross-categories to offer (exclude the host section's own category) */
-  show: Array<'diet' | 'symptoms' | 'medications'>;
+  show: Array<Category>;
+  /**
+   * Categories to log automatically (no tap needed). Used so that a symptom
+   * mentioned anywhere — e.g. "nausea" in a diet note — is recorded on the
+   * symptoms page on its own.
+   */
+  auto?: Array<Category>;
   title?: string;
 }
 
@@ -22,22 +30,23 @@ interface DetectedExtrasProps {
  */
 type Status = 'idle' | 'saving' | 'done' | 'error';
 
-export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
+export function DetectedExtras({ parsed, show, auto, title }: DetectedExtrasProps) {
   const [status, setStatus] = useState<Record<string, Status>>({});
-
-  if (!parsed) return null;
+  const autoRunRef = useRef<Set<string>>(new Set());
 
   const items: Array<{
     key: string;
+    cat: Category;
     icon: React.ReactNode;
     label: string;
     run: () => Promise<unknown>;
   }> = [];
 
-  if (show.includes('symptoms')) {
+  if (parsed && show.includes('symptoms')) {
     parsed.symptoms.forEach((s, i) =>
       items.push({
         key: `s-${i}-${s.name}`,
+        cat: 'symptoms',
         icon: <Activity className="h-3 w-3 mr-1" />,
         label: `${s.name}${s.severity ? ` (${s.severity}/10)` : ''}`,
         run: () =>
@@ -53,16 +62,27 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
     );
   }
 
-  if (show.includes('medications')) {
+  if (parsed && show.includes('medications')) {
     parsed.medications.forEach((m, i) =>
       items.push({
         key: `m-${i}-${m.name}`,
+        cat: 'medications',
         icon: <Pill className="h-3 w-3 mr-1" />,
         label: `${m.name}${m.dose ? ` ${m.dose}` : ''}`,
-        // A med named in a voice note is a one-off "as needed" event: create it
-        // inactive (so it stays out of the daily medication tracker) and record
-        // a taken dose so it appears on the calendar + doctor summary.
+        // If the med is already registered → mark it taken once today. If not →
+        // add it as a same-day situational event only (inactive, so it stays out
+        // of the daily tracker + dashboard count; shows on calendar + summary).
         run: async () => {
+          const d = new Date();
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const list = await medsApi.list().catch(() => [] as any[]);
+          const existing = list.find(
+            (md) => md.name.trim().toLowerCase() === m.name.trim().toLowerCase()
+          );
+          if (existing) {
+            await medsApi.toggleDose(existing.id, 0, true, key).catch(() => {});
+            return existing;
+          }
           const created = await medsApi.create({
             name: m.name,
             dosage: m.dose ?? 'Not specified',
@@ -73,8 +93,6 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
             notes: m.notes || 'Taken as needed (logged from a voice note)',
             active: false,
           });
-          const d = new Date();
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           await medsApi.toggleDose(created.id, 0, true, key).catch(() => {});
           return created;
         },
@@ -82,10 +100,11 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
     );
   }
 
-  if (show.includes('diet') && parsed.diet) {
+  if (parsed && show.includes('diet') && parsed.diet) {
     const d = parsed.diet;
     items.push({
       key: `d-${d.food}`,
+      cat: 'diet',
       icon: <Apple className="h-3 w-3 mr-1" />,
       label: d.food,
       run: () =>
@@ -99,8 +118,6 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
     });
   }
 
-  if (items.length === 0) return null;
-
   const handle = async (key: string, run: () => Promise<unknown>) => {
     setStatus((prev) => ({ ...prev, [key]: 'saving' }));
     try {
@@ -110,6 +127,22 @@ export function DetectedExtras({ parsed, show, title }: DetectedExtrasProps) {
       setStatus((prev) => ({ ...prev, [key]: 'error' }));
     }
   };
+
+  // Auto-log the requested categories (e.g. symptoms) as soon as a note is
+  // parsed — no tap needed — so they land on their own page automatically.
+  useEffect(() => {
+    if (!parsed || !auto || auto.length === 0) return;
+    autoRunRef.current = new Set();
+    items
+      .filter((it) => auto.includes(it.cat) && !autoRunRef.current.has(it.key))
+      .forEach((it) => {
+        autoRunRef.current.add(it.key);
+        handle(it.key, it.run);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsed]);
+
+  if (items.length === 0) return null;
 
   const anyError = items.some((it) => status[it.key] === 'error');
 

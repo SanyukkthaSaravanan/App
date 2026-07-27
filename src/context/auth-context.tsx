@@ -15,6 +15,44 @@ interface AuthContextValue {
 // migrated yet (server flag is authoritative once available).
 const onboardedKey = (id: string) => `flaire_onboarded_${id}`;
 
+// Local backstop for the user's saved preferences (condition / tracked factors
+// / known triggers). The server is authoritative once the columns are migrated;
+// until then this keeps preferences "checked off" across reloads on the device.
+const prefsKey = (id: string) => `flaire_prefs_${id}`;
+
+type SavedPrefs = Pick<AuthUser, 'condition' | 'trackedFactors' | 'knownTriggers'>;
+
+function loadPrefs(id: string): SavedPrefs {
+  try {
+    return JSON.parse(localStorage.getItem(prefsKey(id)) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(id: string, data: OnboardingInput) {
+  const prev = loadPrefs(id);
+  const next: SavedPrefs = {
+    condition: data.condition ?? prev.condition ?? null,
+    trackedFactors: data.trackedFactors ?? prev.trackedFactors ?? null,
+    knownTriggers: data.knownTriggers ?? prev.knownTriggers ?? null,
+  };
+  localStorage.setItem(prefsKey(id), JSON.stringify(next));
+}
+
+// Server value wins when present; otherwise fall back to the local copy so a
+// reload/login on the same device still shows the saved preferences.
+function mergePrefs(u: AuthUser): AuthUser {
+  const saved = loadPrefs(u.id);
+  const hasArr = (v: unknown) => Array.isArray(v) && v.length > 0;
+  return {
+    ...u,
+    condition: u.condition ?? saved.condition ?? null,
+    trackedFactors: hasArr(u.trackedFactors) ? u.trackedFactors : saved.trackedFactors ?? u.trackedFactors,
+    knownTriggers: hasArr(u.knownTriggers) ? u.knownTriggers : saved.knownTriggers ?? u.knownTriggers,
+  };
+}
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -28,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!t) { setIsLoading(false); return; }
       try {
         const { user: me } = await authApi.me();
-        setUser(me);
+        setUser(mergePrefs(me));
       } catch {
         // Token invalid/expired — clear it
         tokenStore.clear();
@@ -42,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const res = await authApi.login(email, password);
     tokenStore.set(res.token);
-    setUser(res.user);
+    setUser(mergePrefs(res.user));
   }, []);
 
   const register = useCallback(async (
@@ -55,7 +93,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const completeOnboarding = useCallback(async (data: OnboardingInput) => {
     await authApi.onboarding(data);
-    if (user) localStorage.setItem(onboardedKey(user.id), '1');
+    if (user) {
+      localStorage.setItem(onboardedKey(user.id), '1');
+      savePrefs(user.id, data);
+    }
     setUser((prev) =>
       prev
         ? {

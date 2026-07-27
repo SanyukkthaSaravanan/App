@@ -226,6 +226,50 @@ medicationsRouter.post('/', async (req, res, next) => {
   }
 });
 
+const patchSchema = z.object({
+  name: z.string().min(1).optional(),
+  dosage: z.string().optional(),
+  frequency: z.string().optional(),
+  scheduleTimes: z.array(z.string()).optional(),
+  notes: z.string().nullable().optional(),
+});
+
+/** PATCH /api/medications/:id — edit a medication. */
+medicationsRouter.patch('/:id', async (req, res, next) => {
+  try {
+    const body = patchSchema.parse(req.body);
+    const updates: Record<string, unknown> = {};
+    if (body.name !== undefined) updates.name = body.name;
+    if (body.dosage !== undefined) updates.dosage = body.dosage;
+    if (body.frequency !== undefined) updates.frequency = body.frequency;
+    if (body.scheduleTimes !== undefined) updates.scheduleTimes = body.scheduleTimes;
+    if (body.notes !== undefined) updates.notes = body.notes;
+
+    const updated = sb(
+      await supabase
+        .from('Medication')
+        .update(updates)
+        .eq('id', req.params.id)
+        .eq('userId', req.userId!)
+        .select()
+        .single()
+    );
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** DELETE /api/medications/:id — remove a medication (doses cascade). */
+medicationsRouter.delete('/:id', async (req, res, next) => {
+  try {
+    await supabase.from('Medication').delete().eq('id', req.params.id).eq('userId', req.userId!);
+    res.status(204).end();
+  } catch (e) {
+    next(e);
+  }
+});
+
 medicationsRouter.get('/:id/doses', async (req, res, next) => {
   try {
     const doses = sb(
