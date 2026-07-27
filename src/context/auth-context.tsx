@@ -1,5 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth as authApi, token as tokenStore, type AuthUser, type OnboardingInput } from '../lib/api';
+import { identifyUser, resetAnalytics } from '../lib/analytics';
+
+// Tie analytics events to the signed-in user (id + basic account fields only —
+// never health data).
+function identifyFromUser(u: AuthUser) {
+  identifyUser(u.id, {
+    email: u.email,
+    username: u.username,
+    name: u.firstName ? `${u.firstName}${u.lastName ? ` ${u.lastName}` : ''}` : null,
+  });
+}
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -67,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const { user: me } = await authApi.me();
         setUser(mergePrefs(me));
+        identifyFromUser(me);
       } catch {
         // Token invalid/expired — clear it
         tokenStore.clear();
@@ -81,6 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await authApi.login(email, password);
     tokenStore.set(res.token);
     setUser(mergePrefs(res.user));
+    identifyFromUser(res.user);
   }, []);
 
   const register = useCallback(async (
@@ -113,6 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     tokenStore.clear();
     setUser(null);
+    resetAnalytics();
   }, []);
 
   const needsOnboarding =
