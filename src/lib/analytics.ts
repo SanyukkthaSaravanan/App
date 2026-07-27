@@ -81,22 +81,21 @@ export function startLogTimer(logType: LogType) {
  * off or no timer was started (so a save without a matching open is ignored).
  */
 export function trackLogCompleted(logType: LogType, props: Record<string, unknown> = {}) {
+  if (!analyticsEnabled) return;
   const start = logTimers.get(logType);
   logTimers.delete(logType);
-  if (!analyticsEnabled || start == null) {
-    // Helps diagnose a missing event: shows whether analytics is on and whether
-    // a matching startLogTimer ran before this save.
-    console.debug('[analytics] log_completed skipped', { logType, analyticsEnabled, hadTimer: start != null });
-    return;
-  }
-  const durationMs = Math.round(performance.now() - start);
-  const durationSeconds = Math.round((durationMs / 1000) * 10) / 10;
-  console.debug('[analytics] log_completed', { logType, durationSeconds, ...props });
+  // Always record that a log happened. Duration is attached whenever the open
+  // was timed (the normal case); if a timer somehow wasn't set, the event still
+  // fires with a null duration and duration_known:false so nothing is missed.
+  const durationMs = start != null ? Math.round(performance.now() - start) : null;
+  const durationSeconds = durationMs != null ? Math.round((durationMs / 1000) * 10) / 10 : null;
+  console.debug('[analytics] log_completed', { logType, durationSeconds, hadTimer: start != null, ...props });
   posthog.capture('log_completed', {
     log_type: logType,
     duration_ms: durationMs,
     duration_seconds: durationSeconds,
-    under_60s: durationSeconds <= 60,
+    under_60s: durationSeconds != null ? durationSeconds <= 60 : null,
+    duration_known: start != null,
     ...props,
   });
 }
