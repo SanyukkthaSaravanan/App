@@ -196,36 +196,61 @@ function buildTopSymptoms(period: TimePeriod, symptoms: any[]) {
 }
 
 // Medication adherence per bucket = doses taken ÷ doses expected (× 100).
-// A med only contributes expected doses for days on/after its startDate (and
-// on/before any endDate) — a medication added later never existed for the
-// earlier dates, so it must not drag those buckets' adherence down. Buckets
-// with no scheduled med active return null (no data), not a misleading 0%.
+//
+// History is FROZEN: each PAST day's expected/taken is derived from the dose
+// records that actually exist for that day, NOT the medication's current
+// schedule. So editing a med today (e.g. adding a second daily dose) can never
+// rewrite an earlier day's adherence — yesterday's 1-of-1 stays 100%. Only
+// TODAY uses the current schedule, so new doses count from today onward.
+// As-needed meds are excluded; days with nothing scheduled/logged return null
+// (no data) rather than a misleading 0%.
 function buildAdherence(period: TimePeriod, meds: any[], allDoses: any[][]) {
   const buckets = generateBuckets(period);
-  const dayMs = 86400000;
-  const takenTimes = allDoses
-    .flat()
-    .filter((d) => d.takenAt)
-    .map((d) => +new Date(d.takenAt));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const keyOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const isAsNeeded = (m: any) => String(m.frequency ?? '').toLowerCase() === 'as needed';
 
-  // Whole days in [b.start, b.end] during which the med was active.
-  const activeDays = (m: any, b: Bucket) => {
-    const medStart = m.startDate ? new Date(m.startDate).setHours(0, 0, 0, 0) : b.start;
-    const medEnd = m.endDate ? new Date(m.endDate).setHours(23, 59, 59, 999) : Date.now();
-    const from = Math.max(medStart, b.start);
-    const to = Math.min(medEnd, b.end);
-    return to <= from ? 0 : Math.round((to - from) / dayMs);
-  };
+  // Only scheduled meds count toward adherence.
+  const scheduledIds = new Set(meds.filter((m) => !isAsNeeded(m)).map((m) => m.id));
+
+  // Tally dose records per local day. The day comes from scheduledAt
+  // (`YYYY-MM-DD…`), which is the local date the dose was logged for.
+  const byDay = new Map<string, { records: number; taken: number }>();
+  for (const d of allDoses.flat()) {
+    if (!scheduledIds.has(d.medicationId) || !d.scheduledAt) continue;
+    const key = String(d.scheduledAt).slice(0, 10);
+    const rec = byDay.get(key) ?? { records: 0, taken: 0 };
+    rec.records += 1;
+    if (d.takenAt) rec.taken += 1;
+    byDay.set(key, rec);
+  }
+
+  const now = new Date();
+  const todayKey = keyOf(now);
+  // Current scheduled doses/day — applied to TODAY only.
+  const todaySchedule = meds.reduce((a, m) => {
+    if (isAsNeeded(m)) return a;
+    const started = m.startDate ? new Date(m.startDate) <= now : true;
+    const notEnded = m.endDate ? new Date(m.endDate) >= now : true;
+    const perDay = Array.isArray(m.scheduleTimes) && m.scheduleTimes.length ? m.scheduleTimes.length : 1;
+    return a + (started && notEnded ? perDay : 0);
+  }, 0);
 
   return buckets.map((b) => {
-    const expected = meds.reduce((a, m) => {
-      // As-needed (PRN) meds have no required schedule — they don't count
-      // toward adherence.
-      if (String(m.frequency ?? '').toLowerCase() === 'as needed') return a;
-      const perDay = Array.isArray(m.scheduleTimes) && m.scheduleTimes.length ? m.scheduleTimes.length : 1;
-      return a + perDay * activeDays(m, b);
-    }, 0);
-    const taken = takenTimes.filter((t) => t >= b.start && t <= b.end).length;
+    let expected = 0;
+    let taken = 0;
+    const startDay = new Date(b.start);
+    for (
+      let dd = new Date(startDay.getFullYear(), startDay.getMonth(), startDay.getDate());
+      +dd <= b.end;
+      dd.setDate(dd.getDate() + 1)
+    ) {
+      if (+dd > +now) break; // ignore future days
+      const key = keyOf(dd);
+      const rec = byDay.get(key) ?? { records: 0, taken: 0 };
+      taken += rec.taken;
+      expected += key === todayKey ? Math.max(todaySchedule, rec.records) : rec.records;
+    }
     const adherence = expected > 0 ? Math.min(100, Math.round((taken / expected) * 100)) : null;
     return { period: b.label, adherence };
   });

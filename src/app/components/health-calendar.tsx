@@ -2,10 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   calendar as calendarApi,
-  medications as medsApi,
   insights as insightsApi,
   type CalendarEvent,
-  type Medication,
 } from '../../lib/api';
 import { useAuth } from '../../context/auth-context';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -39,14 +37,11 @@ export function HealthCalendar() {
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
-  // Active meds (with schedules) let us flag days where a scheduled dose was
-  // missed; the trigger set powers the trigger-food warning.
-  const [meds, setMeds] = useState<Medication[]>([]);
+  // AI-flagged foods feed the trigger-food warning alongside the user's triggers.
   const [potentialTriggers, setPotentialTriggers] = useState<string[]>([]);
   const { user } = useAuth();
 
   useEffect(() => {
-    medsApi.list().then(setMeds).catch(() => {});
     insightsApi.analyze().then((a) => setPotentialTriggers(a.triggerFoods ?? [])).catch(() => {});
   }, []);
 
@@ -148,27 +143,14 @@ export function HealthCalendar() {
   const now = new Date(); // real "today" in the user's local time
   const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  // Scheduled doses expected on a given day, across active meds that were live
-  // then (as-needed meds have no schedule, so they contribute 0 and never "miss").
-  const expectedDosesOn = (dayDate: Date) => {
-    const dayStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
-    const dayEnd = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 23, 59, 59, 999);
-    return meds.reduce((a, m) => {
-      // As-needed meds aren't required doses, so they can't be "missed".
-      if (String(m.frequency ?? '').toLowerCase() === 'as needed') return a;
-      const started = m.startDate ? new Date(m.startDate) <= dayEnd : true;
-      const notEnded = m.endDate ? new Date(m.endDate) >= dayStart : true;
-      const times = Array.isArray(m.scheduleTimes) ? m.scheduleTimes.length : 0;
-      return a + (started && notEnded ? times : 0);
-    }, 0);
-  };
-
   // The three warning conditions for a day: missed meds (past days only),
   // trigger foods eaten, or a severe (>6) symptom.
   const getWarnings = (dayDate: Date, dayData: DayData | null) => {
     const isPast = dayDate < todayMidnight;
-    const takenDoses = dayData?.medications.filter((m) => m.taken).length ?? 0;
-    const missedMeds = isPast && expectedDosesOn(dayDate) > takenDoses;
+    // Frozen history: a day only counts as "missed" if a dose that WAS logged
+    // that day wasn't taken. If every logged dose was taken, no warning — and a
+    // schedule edit made later never rewrites a past day.
+    const missedMeds = isPast && (dayData?.medications.some((m) => !m.taken) ?? false);
     const triggerFoods = dayData?.hadTriggerFood ?? false;
     const severeSymptom = dayData?.symptoms.some((s) => s.severity > SEVERE_SYMPTOM_THRESHOLD) ?? false;
     return { missedMeds, triggerFoods, severeSymptom, any: missedMeds || triggerFoods || severeSymptom };
