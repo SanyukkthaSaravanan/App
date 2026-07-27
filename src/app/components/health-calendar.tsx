@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { calendar as calendarApi, type CalendarEvent } from '../../lib/api';
+import {
+  calendar as calendarApi,
+  medications as medsApi,
+  insights as insightsApi,
+  type CalendarEvent,
+  type Medication,
+} from '../../lib/api';
+import { useAuth } from '../../context/auth-context';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { ChevronLeft, ChevronRight, Flame, Pill, Apple, Activity, X, AlertCircle, Calendar } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 
-const TRIGGER_FOODS = ['Sugar', 'Dairy', 'Gluten', 'Alcohol', 'Bread', 'Pasta', 'Fried Food', 'Processed Food', 'Caffeine', 'Toast'];
+// Common/"potential" trigger foods, layered with the user's own known triggers
+// and any AI-flagged foods at runtime (see triggerSet below).
+const COMMON_TRIGGER_FOODS = ['sugar', 'dairy', 'gluten', 'alcohol', 'bread', 'pasta', 'fried food', 'processed food', 'caffeine', 'toast'];
+
+// A severity strictly greater than this counts as a "severe" symptom.
+const SEVERE_SYMPTOM_THRESHOLD = 6;
 
 interface DayData {
   date: Date;
@@ -16,6 +28,8 @@ interface DayData {
   nutrition: { meal: string; items: string[] }[];
   appointments?: { type: string; time: string; provider: string }[];
   isFlareDay: boolean;
+  /** A trigger / potential-trigger food was eaten this day. */
+  hadTriggerFood: boolean;
   notes?: string;
 }
 
@@ -25,6 +39,24 @@ export function HealthCalendar() {
   const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
+  // Active meds (with schedules) let us flag days where a scheduled dose was
+  // missed; the trigger set powers the trigger-food warning.
+  const [meds, setMeds] = useState<Medication[]>([]);
+  const [potentialTriggers, setPotentialTriggers] = useState<string[]>([]);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    medsApi.list().then(setMeds).catch(() => {});
+    insightsApi.analyze().then((a) => setPotentialTriggers(a.triggerFoods ?? [])).catch(() => {});
+  }, []);
+
+  // Combined lowercased set: common potential triggers + the user's declared
+  // triggers + any AI-flagged foods. Used to warn when one is eaten.
+  const triggerSet = new Set<string>([
+    ...COMMON_TRIGGER_FOODS,
+    ...(user?.knownTriggers ?? []).map((t) => t.toLowerCase().trim()),
+    ...potentialTriggers.map((t) => t.toLowerCase().trim()),
+  ]);
 
   useEffect(() => {
     // Widen the query by a day on each side so events near month edges that
@@ -78,6 +110,7 @@ export function HealthCalendar() {
     const nutrition: DayData['nutrition'] = [];
     const appointments: DayData['appointments'] = [];
     let isFlareDay = false;
+    let hadTriggerFood = false;
     for (const ev of evs) {
       if (ev.type === 'symptom') {
         symptoms.push({ name: ev.title, severity: ev.severity });
@@ -90,13 +123,15 @@ export function HealthCalendar() {
         appointments.push({ type: ev.title, time: '', provider: '' });
       } else if (ev.type === 'diet') {
         const p = ev.payload as any;
-        nutrition.push({
-          meal: p?.mealType ? String(p.mealType) : 'Meal',
-          items: Array.isArray(p?.foods) && p.foods.length ? p.foods : [ev.title],
-        });
+        const items: string[] = Array.isArray(p?.foods) && p.foods.length ? p.foods : [ev.title];
+        nutrition.push({ meal: p?.mealType ? String(p.mealType) : 'Meal', items });
+        // Flagged at log time (negative reaction) OR matches a known/potential trigger.
+        const flagged = Array.isArray(p?.triggers) && p.triggers.length > 0;
+        const matches = items.some((it) => triggerSet.has(String(it).toLowerCase().trim()));
+        if (flagged || matches) hadTriggerFood = true;
       }
     }
-    return { date, symptoms, medications, nutrition, appointments, isFlareDay };
+    return { date, symptoms, medications, nutrition, appointments, isFlareDay, hadTriggerFood };
   };
 
   const handleDayClick = (day: number) => {
@@ -111,6 +146,31 @@ export function HealthCalendar() {
   const firstDay = getFirstDayOfMonth(currentDate);
   const monthName = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const now = new Date(); // real "today" in the user's local time
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // Scheduled doses expected on a given day, across active meds that were live
+  // then (as-needed meds have no schedule, so they contribute 0 and never "miss").
+  const expectedDosesOn = (dayDate: Date) => {
+    const dayStart = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate());
+    const dayEnd = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 23, 59, 59, 999);
+    return meds.reduce((a, m) => {
+      const started = m.startDate ? new Date(m.startDate) <= dayEnd : true;
+      const notEnded = m.endDate ? new Date(m.endDate) >= dayStart : true;
+      const times = Array.isArray(m.scheduleTimes) ? m.scheduleTimes.length : 0;
+      return a + (started && notEnded ? times : 0);
+    }, 0);
+  };
+
+  // The three warning conditions for a day: missed meds (past days only),
+  // trigger foods eaten, or a severe (>6) symptom.
+  const getWarnings = (dayDate: Date, dayData: DayData | null) => {
+    const isPast = dayDate < todayMidnight;
+    const takenDoses = dayData?.medications.filter((m) => m.taken).length ?? 0;
+    const missedMeds = isPast && expectedDosesOn(dayDate) > takenDoses;
+    const triggerFoods = dayData?.hadTriggerFood ?? false;
+    const severeSymptom = dayData?.symptoms.some((s) => s.severity > SEVERE_SYMPTOM_THRESHOLD) ?? false;
+    return { missedMeds, triggerFoods, severeSymptom, any: missedMeds || triggerFoods || severeSymptom };
+  };
 
   const calendarDays = [];
   // Add empty cells for days before the first of the month
@@ -125,11 +185,15 @@ export function HealthCalendar() {
       currentDate.getMonth() === now.getMonth() &&
       currentDate.getFullYear() === now.getFullYear();
 
-    const hasMissedMeds = dayData?.medications.some(m => !m.taken);
-    const hasTriggerFoods = dayData?.nutrition.some(meal => 
-      meal.items.some(item => TRIGGER_FOODS.includes(item))
-    );
-    const hasWarning = hasMissedMeds || hasTriggerFoods;
+    const warnings = getWarnings(new Date(currentDate.getFullYear(), currentDate.getMonth(), day), dayData);
+    const hasWarning = warnings.any;
+    const warningLabel = [
+      warnings.missedMeds && 'missed medications',
+      warnings.triggerFoods && 'trigger foods',
+      warnings.severeSymptom && 'severe symptoms',
+    ]
+      .filter(Boolean)
+      .join(', ');
 
     calendarDays.push(
       <div
@@ -151,7 +215,7 @@ export function HealthCalendar() {
             </span>
             <div className="flex items-center gap-1">
               {hasWarning && (
-                <AlertCircle className="h-2.5 w-2.5 sm:h-3 sm:w-3" style={{ color: '#F59E0B' }} title="Missed medications or trigger foods" />
+                <AlertCircle className="h-2.5 w-2.5 sm:h-3 sm:w-3" style={{ color: '#F59E0B' }} title={`Warning: ${warningLabel}`} />
               )}
               {dayData?.isFlareDay && (
                 <Flame className="h-2.5 w-2.5 sm:h-3 sm:w-3" style={{ color: '#E89BA1' }} />
@@ -248,7 +312,7 @@ export function HealthCalendar() {
               </div>
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4" style={{ color: '#F59E0B' }} />
-                <span className="text-sm">Warning (Meds/Diet)</span>
+                <span className="text-sm">Warning (Meds/Diet/Severe symptom)</span>
               </div>
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4 text-muted-foreground" />
@@ -299,24 +363,40 @@ export function HealthCalendar() {
                 )}
 
                 {/* Display warning badges */}
-                {selectedDay.medications.some(m => !m.taken) && (
-                  <Badge
-                    className="flex items-center gap-1 w-fit"
-                    style={{ backgroundColor: '#F59E0B', color: 'white' }}
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    Missed Medications
-                  </Badge>
-                )}
-                {selectedDay.nutrition.some(meal => meal.items.some(item => TRIGGER_FOODS.includes(item))) && (
-                  <Badge
-                    className="flex items-center gap-1 w-fit"
-                    style={{ backgroundColor: '#F59E0B', color: 'white' }}
-                  >
-                    <AlertCircle className="h-3 w-3" />
-                    Trigger Foods
-                  </Badge>
-                )}
+                {(() => {
+                  const w = getWarnings(selectedDay.date, selectedDay);
+                  return (
+                    <>
+                      {w.missedMeds && (
+                        <Badge
+                          className="flex items-center gap-1 w-fit"
+                          style={{ backgroundColor: '#F59E0B', color: 'white' }}
+                        >
+                          <AlertCircle className="h-3 w-3" />
+                          Missed Medications
+                        </Badge>
+                      )}
+                      {w.triggerFoods && (
+                        <Badge
+                          className="flex items-center gap-1 w-fit"
+                          style={{ backgroundColor: '#F59E0B', color: 'white' }}
+                        >
+                          <AlertCircle className="h-3 w-3" />
+                          Trigger Foods
+                        </Badge>
+                      )}
+                      {w.severeSymptom && (
+                        <Badge
+                          className="flex items-center gap-1 w-fit"
+                          style={{ backgroundColor: '#F59E0B', color: 'white' }}
+                        >
+                          <AlertCircle className="h-3 w-3" />
+                          Severe Symptoms
+                        </Badge>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Appointments */}

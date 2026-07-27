@@ -187,6 +187,9 @@ function buildTopSymptoms(period: TimePeriod, symptoms: any[]) {
     });
   });
   return [...counts.entries()]
+    // Only symptoms logged more than once are "frequent" enough to chart;
+    // a one-off still shows on the calendar + summary, just not here.
+    .filter(([, count]) => count > 1)
     .map(([trigger, count]) => ({ trigger, count }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 6);
@@ -627,7 +630,7 @@ export function HealthInsights() {
           <CardContent>
             {triggerData.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">
-                No symptoms logged in this period yet.
+                Nothing recurring yet — a symptom appears here once it's logged more than once.
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={250}>
