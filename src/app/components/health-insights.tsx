@@ -634,7 +634,7 @@ export function HealthInsights() {
             <ResponsiveContainer width="100%" height={300}>
               <AreaChart id="symptom-trends-area-chart" data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" key="symptom-grid" />
-                <XAxis dataKey="date" key="symptom-xaxis" />
+                <XAxis dataKey="date" interval={0} tick={{ fontSize: 11 }} key="symptom-xaxis" />
                 <YAxis domain={[0, 10]} key="symptom-yaxis" />
                 <Tooltip key="symptom-tooltip" />
                 <Legend key="symptom-legend" />
@@ -678,7 +678,7 @@ export function HealthInsights() {
                 <BarChart id="triggers-bar-chart" data={triggerData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" key="triggers-grid" />
                   <XAxis type="number" allowDecimals={false} key="triggers-xaxis" />
-                  <YAxis dataKey="trigger" type="category" width={90} key="triggers-yaxis" />
+                  <YAxis dataKey="trigger" type="category" width={90} interval={0} tick={{ fontSize: 11 }} key="triggers-yaxis" />
                   <Tooltip key="triggers-tooltip" />
                   <Bar dataKey="count" fill="#7293BB" radius={[0, 8, 8, 0]} key="triggers-bar" />
                 </BarChart>
@@ -702,7 +702,7 @@ export function HealthInsights() {
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart id="adherence-line-chart" data={medicationAdherence}>
                   <CartesianGrid strokeDasharray="3 3" key="adherence-grid" />
-                  <XAxis dataKey="period" key="adherence-xaxis" />
+                  <XAxis dataKey="period" interval={0} tick={{ fontSize: 11 }} key="adherence-xaxis" />
                   <YAxis domain={[0, 100]} key="adherence-yaxis" />
                   <Tooltip key="adherence-tooltip" />
                   <Line
